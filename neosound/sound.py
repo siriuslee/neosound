@@ -1,4 +1,5 @@
 from __future__ import division, print_function
+from matplotlib import pyplot as plt
 import re
 import os
 import random
@@ -7,38 +8,27 @@ import numpy as np
 from brian import second, hertz, Quantity, units
 from brian.hears import dB
 from brian.hears import Sound as BHSound
+from scipy.signal import firwin, filtfilt
 from lasp.signal import lowpass_filter, bandpass_filter, highpass_filter
 try:
     from neo.core.baseneo import _check_annotations
 except ImportError:
     from neosound.annotations import _check_annotations
 from neosound.sound_manager import *
-import inspect
-
-keep_properties = ["samplerate",
-                   "start_time",
-                   "end_time",
-                   "components",
-                   ]
 
 
-def reinitialize(func):
-    '''
-    Reinitializes the first output of the function func as a Sound object and if more outputs exist, attempts to
-    keep the
-    metadata from the last output.
-    '''
+def create_sound(func):
 
     @wraps(func)
-    def reinitialize_sound(*args, **kwargs):
-        output = func(*args, **kwargs)
-        if not isinstance(output, tuple):
-            return Sound(output, manager=sm)
-        elif len(output) == 2:
-            return Sound(output[0], manager=sm, keep_metadata=output[-1])
-        else:
-            return Sound(output[0], manager=sm, keep_metadata=output[-1]), output[1:-1]
-    return reinitialize_sound
+    def create(*args, **kwargs):
+        manager = kwargs.pop("manager", SoundManager())
+        created = func(*args, **kwargs)
+        created = Sound(created, manager=manager)
+        created.manager.store(created, dict(type=CreateTransform,
+                                            sound=func.__name__), save=True)
+        return created
+
+    return create
 
 
 class Sound(BHSound):
@@ -53,123 +43,91 @@ class Sound(BHSound):
     nyquist_frequency = property(fget=lambda self: self.samplerate / 2,
                                  doc='The maximum frequency possible in the sound.')
     is_silence = property(fget=lambda self: np.all([len(ss) == 0 for ss in self.nonzero()]),
-                          doc='A boolean describing the sound is complete silence.')
+                          doc='A boolean describing if the sound is complete silence.')
     sampleperiod = property(fget=lambda self: 1 / self.samplerate,
                             doc='The time period for each sample (s).')
     ncomponents = property(fget=lambda self: len(self.components),
-                           doc="Number of components of this combined sound.")
+                           doc="Number of components of this sound.")
+    components = property(fget=lambda self: self.manager.get_roots(self.id),
+                          doc="The ids for each root component of this sound.")
 
     def __new__(cls, sound, *args, **kwargs):
 
-        kwargs.pop("merge_metadata", None)
         kwargs.pop("manager", None)
-        kwargs.pop("components", None)
+        kwargs.pop("initialize", None)
 
         return BHSound.__new__(cls, sound, *args, **kwargs)
 
-    def __init__(self, sound, manager=None, components=list(), merge_metadata=None, **kwargs):
-        '''
-        :param data: Can be either a string referencing an audio filename or a previous Sound object or a numpy array /
-        list of arrays representing a sound waveform.
-        :param manager: The sound manager object used to manage IDs, querying, and any other file IO.
-        :param keep_metadata: An optional named argument from which sound metadata will also be taken.
-        '''
+    def __init__(self, sound, manager=SoundManager(), initialize=False, **kwargs):
 
-        # Sound manager is optional but necessary for storage of data
         self.manager = manager
-        if self.manager:
-            self.id = self.manager.get_id()
-        else:
-            self.id = None
+        self.id = self.manager.get_id()
 
         # Create default attributes
         self.annotations = dict()
-        self.components = list()
-        self.start_time = 0 * second
-        self.end_time = self.duration
 
-        # Depending on the type of input, initialize the Sound object
-        if isinstance(sound, self.__class__):
-            # Ensure that the sound object has necessary attributes
-            if not hasattr(sound, "annotations"):
-                sound.annotations = dict()
-            if not hasattr(sound, "components"):
-                sound.components = list()
-            # SoundTransform merges metadata from previous instance
-            transform = SoundTransform(self, sound)
-            transform.transform()
-            if hasattr(sound, "components"):
-                components.extend(sound.components)
-
-        else:
-            # Initialize with new metadata
-            if isinstance(sound, str):
-                self.annotate(original_filename=sound)
-
-            self.annotate(max_frequency=self.nyquist_frequency,
-                          min_frequency=0 * hertz,
-                          original_start_time=0 * second,
-                          original_end_time=self.duration,
-                          original_id=self.id,
-                          components=list(),
-                          component_ids=list(),
-                          **kwargs)
-
-        self._add_components(components)
-
-        # Add metadata from Sound object in kwargs["keep_metadata"] if it exists
-        if merge_metadata is not None:
-            transform = SoundTransform(self, merge_metadata)
-            transform.transform()
+        if isinstance(sound, str):
+            self.annotate(original_filename=sound)
+            self.manager.store(self, dict(type=LoadTransform,
+                                          filename=sound), save=True)
+        if initialize:
+            self.manager.store(self, dict(type=InitTransform), save=True)
 
     def annotate(self, **annotations):
 
         _check_annotations(annotations)
         self.annotations.update(annotations)
+        self.manager.database.store_annotations(self.id, **annotations)
+
+    def __array_wrap__(self, obj, context=None):
+
+        tmp = super(Sound, self).__array_wrap__(obj, context)
+        if not hasattr(tmp, "manager") and hasattr(self, "manager"):
+            tmp.manager = self.manager
+        if not hasattr(tmp, "id") and hasattr(self, "id"):
+            tmp.id = self.id
+        if context is not None:
+            if context[0].__name__ in ["divide", "multiply"]:
+                scalar = [val for val in context[1] if isinstance(val, (int, float, Quantity))]
+                if len(scalar):
+                    scalar = scalar[0]
+                    if context[0].__name__ == "divide":
+                        scalar = 1 / scalar
+                    metadata = dict(type=MultiplyTransform,
+                                    coefficient=scalar)
+                    tmp = self.manager.store(tmp, metadata, self)
+
+        return tmp
+
+    def __array_finalize__(self, obj):
+
+        super(Sound, self).__array_finalize__(obj)
+        self.manager = getattr(obj, "manager", SoundManager())
+        self.id = getattr(obj, "id", self.manager.get_id())
 
     def __getitem__(self, key):
 
         key = self._rekey(key)
-        if self.ncomponents > 0:
-            for ii in xrange(self.ncomponents):
-                component = self.component(ii)
-                sliced = super(Sound, component).__getitem__(key)
-                transform = SliceTransform(sliced, component)
-                component = transform.transform(key)
-                try:
-                    summed += component
-                except NameError:
-                    summed = component
-
-            return summed
+        start, stop = self._keydata(key)
+        metadata = dict(type=SliceTransform,
+                        start_time=start,
+                        end_time=stop,
+                        )
+        sliced = super(Sound, self).__getitem__(key)
+        if isinstance(key, (int, float, Quantity)):
+            return sliced
         else:
-            sliced = super(Sound, self).__getitem__(key)
-            transform = SliceTransform(sliced, self)
-
-            return transform.transform(key)
+            return self.manager.store(sliced, metadata, self)
 
     def __setitem__(self, key, value):
 
         key = self._rekey(key)
+        start, stop = self._keydata(key)
+        metadata = dict(type=SetTransform,
+                        start_time=start,
+                        end_time=stop)
         super(Sound, self).__setitem__(key, value)
-        components = list()
-        if isinstance(key, (int, float, Quantity)):
-            components.append(self.__getitem__(key))
-        elif isinstance(key, (slice, tuple)):
-            channel = slice(None)
-            if isinstance(key, tuple):
-                channel = key[1]
-                key = key[0]
-            segments = self._get_segments(key.start or 0, key.stop or len(self))
-            components = list()
-            for s1, s2 in segments:
-                component = self.__getitem__((slice(s1, s2), channel))
-                if s1 == (key.start or 0):
-                    component._delete_components()
-                transform = ShiftTransform(component)
-                components.append(transform.transform(start=s1*self.sampleperiod))
-        self._delete_components()
-        self._add_components(components)
+        return self.manager.store(self, metadata, value)
 
     def _rekey(self, key):
         if not isinstance(key, (tuple, slice)):
@@ -188,15 +146,35 @@ class Sound(BHSound):
 
         return slice(*newkey), channel
 
-    def _get_segments(self, start, stop):
+    def _keydata(self, key):
 
-        if units.have_same_dimensions(start, second):
-            start *= self.samplerate
-        if units.have_same_dimensions(stop, second):
-            stop *= self.samplerate
+        if isinstance(key, (int, float)):
+            start = key / self.samplerate
+            stop = None
+        elif isinstance(key, Quantity):
+            start = key
+            stop = None
+        elif isinstance(key, (slice, tuple)):
+            if isinstance(key, tuple):
+                key = key[0]
 
-        segment_end_points = [0, start, stop, len(self)]
-        return [(s1, s2) for s1, s2 in zip(segment_end_points[:-1], segment_end_points[1:]) if s2 > s1]
+            if key.start is None:
+                start = 0 * second
+            elif units.have_same_dimensions(key.start, second):
+                start = key.start
+            else:
+                start = key.start / self.samplerate
+
+            if key.stop is None:
+                stop = self.duration
+            elif units.have_same_dimensions(key.stop, second):
+                stop = key.stop
+            else:
+                stop = key.stop / self.samplerate
+        else:
+            raise TypeError("__getitem__ key is of an unexpected type: %s." % str(type(key)))
+
+        return start, stop
 
     def __add__(self, other):
         '''
@@ -210,13 +188,15 @@ class Sound(BHSound):
             print("Duration of the summed sounds must be identical")
             return
         summed = super(Sound, self).__add__(other)
-        # return inspect.stack()
+        metadata = dict(type=AddTransform)
+        return self.manager.store(summed, metadata, [self, other])
 
-        return self.__class__(summed, components=[self, other])
+    def __sub__(self, other):
 
-    def __iadd__(self, other):
+        return self.__add__(-1 * other)
 
-        return self.__add__(other)
+    __iadd__ = __add__
+    __isub__ = __sub__
 
     def to_mono(self):
         '''
@@ -224,13 +204,13 @@ class Sound(BHSound):
         :return: Mono Sound object
         '''
         if self.ndim > 1:
+            metadata = dict(type=MonoTransform)
             data = self.mean(axis=1).reshape((-1, 1))
-            transform = SoundTransform(data, self)
-            return transform.transform()
+            return self.manager.store(data, metadata, self)
 
         return self
 
-    def filter(self, frequency_range=None):
+    def filter(self, frequency_range=None, filter_order=None):
         '''
         Filters the sound within a particular frequency range. Depending on the values supplied, a lowpass, highpass,
         or bandpass filter will be supplied.
@@ -239,32 +219,68 @@ class Sound(BHSound):
         '''
 
         if frequency_range is None:
-            frequency_range = [self.min_frequency, self.max_frequency]
-        else:
-            frequency_range[0] = max(self.min_frequency, frequency_range[0])
-            frequency_range[1] = min(self.max_frequency, frequency_range[1])
-
-        if np.all(np.equal(frequency_range, [self.min_frequency, self.max_frequency])):
             return self
+
+        if self.nsamples > 3 * 512:
+            filter_order = 512
+        elif self.nsamples > 3 * 64:
+            filter_order = 64
+        else:
+            filter_order = 16
+
+        if filter_order * 3 >= self.nsamples:
+            raise ValueError("filter_order cannot be greater than nsamples / 3: 3 * %d > %d" % (filter_order, self.nsamples))
+
+        metadata = dict(type=FilterTransform,
+                        min_frequency=frequency_range[0],
+                        max_frequency=frequency_range[1],
+                        order=filter_order)
 
         if frequency_range[0] == 0:
             if frequency_range[1] < self.nyquist_frequency:
-                filt = lambda self: lowpass_filter(self, frequency_range[1])
+                lowpass = True
+                frequency_range = frequency_range[1]
+            else:
+                return self
         elif frequency_range[1] == self.nyquist_frequency:
-            filt = lambda self: highpass_filter(self, frequency_range[0])
+            lowpass = False
+            frequency_range = frequency_range[0]
         else:
-            filt = lambda self: bandpass_filter(self, frequency_range[0], frequency_range[1])
+            lowpass = False
 
-        data = list()
-        for ch in xrange(self.nchannels):
-            data.append(filt(self.channel(ch)))
+        b = firwin(filter_order, frequency_range, nyq=self.nyquist_frequency,
+                   pass_zero=lowpass, window="hamming", scale=False)
+        a = np.zeros(b.shape)
+        a[0] = 1
+        data = filtfilt(b, a, self, axis=0)
+        # if frequency_range[0] == 0:
+        #     if frequency_range[1] < self.nyquist_frequency:
+        #         filt = lambda self: lowpass_filter(np.asarray(self).squeeze(), self.samplerate, frequency_range[1], filter_order=filter_order)
+        #     else:
+        #         return self
+        # elif frequency_range[1] == self.nyquist_frequency:
+        #     filt = lambda self: highpass_filter(np.asarray(self).squeeze(), self.samplerate, frequency_range[0], filter_order=filter_order)
+        # else:
+        #     filt = lambda self: bandpass_filter(np.asarray(self).squeeze(), self.samplerate, frequency_range[0], frequency_range[1], filter_order=filter_order)
+        #
+        # data = list()
+        # for ch in xrange(self.nchannels):
+        #     data.append(filt(self.channel(ch)))
+        #
+        return self.manager.store(data, metadata, self)
 
-        # Create a Sound object using a list of sound channels
-        data = self.__class__(data, samplerate=self.samplerate, keep_metadata=self)
-        data.annotate(min_freqeuncy=frequency_range[0],
-                      max_frequency=frequency_range[1])
+    def envelope(self, min_power=0*dB):
 
-        return data
+        env = np.abs(np.asarray(self))
+        en
+
+    def to_silence(self):
+
+        return Sound.silence(duration=self.duration, nchannels=self.nchannels, samplerate=self.samplerate)
+
+    def _round_time(self, time):
+
+        return int(time * self.samplerate) * self.sampleperiod
 
     def pad(self, duration, start=None, max_start=None, min_start=0*second):
         '''
@@ -273,24 +289,26 @@ class Sound(BHSound):
         :param start: Prespecified start time for the Sound object in the silence.
         :param min_start, max_start: Start time will be chosen from a uniform distribution between these two values
         if start is not a provided argument.
-        :return: A CombinedSound object with silence applied.
+        :return: A Sound object with silence applied.
         '''
+
 
         if start is None:
             if max_start is None:
                 max_start = duration - self.duration
             start = random.uniform(min_start, min(max_start, duration - self.duration))
 
+        # Round times to nearest sample
+        duration = self._round_time(duration)
+        start = self._round_time(start)
+
         stop = start + self.duration
         padded = self.extended(duration - stop)
-        self.start_time = start
-        self.end_time = stop
+        metadata = dict(type=PadTransform,
+                        start_time=start,
+                        duration=duration)
 
-        return self.__class__(padded.shifted(start), components=[self])
-
-    def unpad(self):
-
-        return self[self.start_time: self.end_time]
+        return self.manager.store(padded.shifted(start), metadata, self)
 
     def embed(self, other, start=None, max_start=None, min_start=0*second):
         '''
@@ -299,7 +317,7 @@ class Sound(BHSound):
         :param start: Prespecified start time for the Sound object in embedded Sound object
         :param min_start, max_start: Start time will be chosen from a uniform distribution between these two values
         if start is not a provided argument.
-        :return: A CombinedSound object with the current Sound object and other Sound object as components
+        :return: A Sound object with the current Sound object and other Sound object as components
         '''
 
         if start is None:
@@ -309,10 +327,10 @@ class Sound(BHSound):
 
         stop = start + self.duration
         duration = max(stop, other.duration)
-        self = self.pad(duration, start=start)
+        padded = self.pad(duration, start=start)
         other = other.pad(duration, start=0*second)
 
-        return self + other
+        return padded + other
 
     def trim(self, duration, trim_from="end", max_start=None, min_start=0*second):
         '''
@@ -327,6 +345,7 @@ class Sound(BHSound):
         if duration >= self.duration:
             return self
 
+        duration = self._round_time(duration)
         if trim_from == "end":
             start = 0 * second
             stop = duration
@@ -337,10 +356,36 @@ class Sound(BHSound):
             if max_start is None:
                 max_start = self.duration - duration
             start = random.uniform(min_start, max_start)
+            start = self._round_time(start)
             start = max(start, self.duration - duration)
             stop = start + duration
 
         return self[start: stop]
+
+    def clip(self, min_val, max_val):
+
+        metadata = dict(type=ClipTransform,
+                        min_value=min_val,
+                        max_value=max_val)
+        clipped = super(Sound, self).clip(min_val, max_val)
+
+        return self.manager.store(clipped, metadata, original=self)
+
+    def get_power_nonsilence(self, silence_threshold=.1):
+
+        waveform = np.abs(np.asarray(self))
+        range = waveform.max() * silence_threshold
+        power = list()
+        for ii in xrange(self.nchannels):
+            arr = waveform[:, ii].squeeze()
+            d = np.diff(arr)
+            inds = np.where(np.all(np.vstack([arr[1:-1] > range,
+                                              d[:-1] > 0,
+                                              d[1:] < 0]),
+                                   axis=0))[0]
+            power.append((arr[1:-1][inds] ** 2).mean())
+
+        return power
 
     @staticmethod
     def query(sounds, query_function):
@@ -356,249 +401,108 @@ class Sound(BHSound):
 
         return sounds
 
-    def component(self, n, padded=True):
+    def component(self, n):
 
-        component = self.components[n]
-        if component.duration < self.duration:
-            if padded:
-                component = component.pad(self.duration,
-                                          start=component.start_time)
+        component_id = self.components[n]
 
-        return component
+        return self.manager.reconstruct_individual(self.id, component_id)
 
-    def _add_components(self, components, offset=0*second):
+    def plot(self):
 
-        for component in components:
-            transform = ShiftTransform(component)
-            component = transform.transform(start=offset)
+        plt.plot(self.times, self)
+        plt.xlim((0 * second, self.duration))
+        plt.xlabel("Time (s)")
 
-            # If the individual components are also combinations...
-            if component.ncomponents > 0:
-                # all of the sub-components need to be offset by this CombinedSound's start_time
-                self._add_components(component.components, component.start_time)
-            else:
-                self._add_component(component)
+    def store(self):
 
-    def _add_component(self, component):
+        self.manager.database.store_data(self.id, np.asarray(self))
+        self.manager.database.store_annotations(self.id, **self.annotations)
 
-        # No need to add silent components
-        if component.is_silence:
-            return
-        if component.end_time - component.start_time != component.duration:
-            component = component.unpad()
-
-        component_dict = self._annotate_component(component)
-        # Check if this component's id exists...
-        # if component_dict["id"] in self.annotations["component_ids"]:
-        #     # and if so try to merge.
-        #     merged = self._merge_component(component_dict, component)
-        # else:
-        merged = False
-
-        # If it wasn't merged into another component, then add it.
-        if not merged:
-            self.components.append(component)
-            self.annotations["components"].append(component_dict)
-            self.annotations["component_ids"].append(component_dict["id"])
-
-    def _delete_components(self):
-
-        self.components = list()
-        self.annotations["components"] = list()
-        self.annotations["component_ids"] = list()
-
-
-    def _merge_component(self, other_dict, other, merged=False):
-        """
-        If all of the values in other match the values of an existing component annotation and the start or end time
-        of the existing one is adjacent to start or end time of the new one, then merge them.
-        :return: Boolean stating if the components were merged
-        """
-
-        new_merge = False
-
-        is_contiguous = lambda s2, e1: (s2 - e1) <= self.sampleperiod
-
-        def is_equal(a, b):
-            try:
-                return (len(a) == len(b)) and all((a[jj] == b[jj] for jj in xrange(len(a))))
-            except TypeError:
-                return a == b
-
-        def merge(first, second, first_dict, second_dict):
-
-            first_dict["end_time"] = second_dict["end_time"]
-            first_dict["original_end_time"] = second_dict["original_end_time"]
-            first = Sound(np.vstack([first, second]), first.manager, keep_metadata=first)
-
-            self.components.append(first)
-            self.annotations["components"].append(first_dict)
-            self.annotations["component_ids"].append(first_dict["id"])
-
-            return first_dict, first
-
-        count = self.annotations["component_ids"].count(other_dict["id"])
-        prev_index = 0
-        for ii in xrange(count):
-            is_match = True
-
-            index = self.annotations["component_ids"].index(other_dict["id"], prev_index)
-            prev_index = index
-            current_dict = self.annotations["components"][index]
-
-            # Check start and end times
-            is_match = True
-            if (is_contiguous(current_dict["original_start_time"], other_dict["original_end_time"]) and
-                is_contiguous(current_dict["start_time"], other_dict["end_time"])):
-                order = [1, 0]
-
-            elif (is_contiguous(other_dict["original_start_time"], current_dict["original_end_time"]) and
-                  is_contiguous(other_dict["start_time"], current_dict["end_time"])):
-                order = [0, 1]
-
-            else:
-                continue
-
-            # Check if all other values match
-            for key in other_dict:
-                if key not in ["start_time", "end_time", "original_start_time", "original_end_time"]:
-                    if not is_equal(current_dict[key], other_dict[key]):
-                        is_match = False
-                        break
-
-            if is_match:
-                new_merge = True
-
-                current = self.components.pop(index)
-                current_dict = self.annotations["components"].pop(index)
-                self.annotations["component_ids"].pop(index)
-
-                first, second = [(current, other)[ii] for ii in order]
-                first_dict, second_dict = [(current_dict, other_dict)[ii] for ii in order]
-
-                current_dict, current = merge(first, second, first_dict, second_dict)
-                break
-
-        if new_merge and (count > 1):
-            self._merge_component(current_dict, current, new_merge)
-
-        return merged or new_merge
-
-
-    def _annotate_component(self, component):
-        '''
-        Need to store any and all information that can take a component from its original Sound object form and turn
-        it into the actual component of the CombinedSound object.
-        The relevant parameters are:
-        id: the original sound's id
-        start_time: the start time of the component in the CombinedSound object
-        end_time: the end time of the component in the CombinedSound object
-        original_start_time: the start time of the component from the original Sound object
-        original_end_time: the end time of the component from the original Sound object
-        level: the sound level(s) for each channel
-        min_frequency: the minimum frequency of the sound in case any filtering has been done
-        max_frequency: the maximum frequency of the sound in case any filtering has been done
-        other parameters will include: ramps, resampling, envelope?
-        '''
-
-        if "original_id" in component.annotations:
-            orig_id = component.annotations["original_id"]
-        else:
-            orig_id = component.id
-
-        component_dict = dict(id=orig_id,
-                              start_time=component.start_time,
-                              end_time=component.end_time,
-                              original_start_time=component.annotations["original_start_time"],
-                              original_end_time=component.annotations["original_end_time"],
-                              level=component.level,
-                              min_frequency=component.annotations["min_frequency"],
-                              max_frequency=component.annotations["max_frequency"],
-                              )
-
-        return component_dict
-
-
-    #def sequence(sounds, duration=10*second, ISIs=None):
-
-
+     #def sequence(sounds, duration=10*second, ISIs=None):
 
     # Wrappers for particular sound types
     @classmethod
-    @reinitialize
+    @create_sound
     def tone(cls, *args, **kwargs):
 
         return super(Sound, cls).tone(*args, **kwargs)
 
     @classmethod
-    @reinitialize
+    @create_sound
     def harmoniccomplex(cls, *args, **kwargs):
 
         return super(Sound, cls).harmoniccomplex(*args, **kwargs)
 
     @classmethod
-    @reinitialize
+    @create_sound
     def whitenoise(cls, *args, **kwargs):
 
         return super(Sound, cls).whitenoise(*args, **kwargs)
 
     @classmethod
-    @reinitialize
+    @create_sound
     def powerlawnoise(cls, *args, **kwargs):
 
         return super(Sound, cls).powerlawnoise(*args, **kwargs)
 
     @classmethod
-    @reinitialize
+    @create_sound
     def pinknoise(cls, *args, **kwargs):
 
         return super(Sound, cls).pinknoise(*args, **kwargs)
 
     @classmethod
-    @reinitialize
+    @create_sound
     def brownnoise(cls, *args, **kwargs):
 
         return super(Sound, cls).brownnoise(*args, **kwargs)
 
     @classmethod
-    @reinitialize
+    @create_sound
     def silence(cls, *args, **kwargs):
 
         return super(Sound, cls).silence(*args, **kwargs)
 
     @classmethod
-    @reinitialize
+    @create_sound
     def clicks(cls, *args, **kwargs):
 
         return super(Sound, cls).clicks(*args, **kwargs)
 
     @classmethod
-    @reinitialize
+    @create_sound
     def click(cls, *args, **kwargs):
 
         return super(Sound, cls).click(*args, **kwargs)
 
     @classmethod
-    @reinitialize
+    @create_sound
     def vowel(cls, *args, **kwargs):
 
         return super(Sound, cls).vowel(*args, **kwargs)
 
     @classmethod
-    @reinitialize
+    @create_sound
     def irno(cls, *args, **kwargs):
 
         return super(Sound, cls).irno(*args, **kwargs)
 
     @classmethod
-    @reinitialize
+    @create_sound
     def irns(cls, *args, **kwargs):
 
         return super(Sound, cls).irns(*args, **kwargs)
 
 
-if True:
-    sm = SoundManager()
+if False:
+    sm = SoundManager(HDF5Store, "/tmp/test.h5")
     shaping = "/auto/k8/tlee/songs/shaping_songs/Track1long.wav"
-    s = Sound(shaping)
-    w = Sound.whitenoise(duration=s.duration, nchannels=s.nchannels, samplerate=s.samplerate)
+    s = Sound(shaping, manager=sm)
+    w = Sound.whitenoise(duration=s.duration, nchannels=s.nchannels, samplerate=s.samplerate, manager=sm)
+    t = Sound.tone(frequency=1000*hertz, duration=s.duration, nchannels=s.nchannels, samplerate=s.samplerate,
+                   manager=sm)
+    x = w[1*second:3*second]
+    s[:x.duration] = x
+    y = s + t
+    z = y.pad(10*second)
+    c = z.component(0)

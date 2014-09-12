@@ -1,204 +1,128 @@
-import random
-from brian import second, Quantity, units
+import numpy as np
+from neosound.sound_store import *
+from neosound.sound_transforms import *
+
 
 class SoundManager(object):
 
-    def __init__(self, sound_store=None):
+    def __init__(self, database=None, filename=None):
 
-        self.store = sound_store
-        self.ids = None
-        # self.list_ids()
+        if database is None:
+            self.database = SoundStore()
+        else:
+            # Create temporary database filename
+            # if filename is None:
+            self.database = database(filename)
+
+        self.ids = self.database.list_ids()
+        self.reconstruct_flag = False
 
     def get_id(self):
 
-        return random.randint(0, 1e6)
+        self.ids = self.database.list_ids()
+        max_id = np.max(self.ids) if len(self.ids) else 0
 
-    def new_id(self, sound_object):
+        return max_id + 1
 
-        sid = self.ids[-1] + 1
-        sound_object.id = sid
-        self.ids.append(sid)
+    def store(self, derived, metadata, original=None, save=False):
 
-    def list_ids(self):
+        try:
+            transform = metadata["type"](self, derived, metadata, original, save)
+        except KeyError as e:
+            raise KeyError("Error trying to store sound transformation metadata: %s" % e)
 
-        ids = self.store.get_ids()
-        ids.sort()
-        self.ids = ids
+        derived = transform.store()
+        return derived
 
+    def get_roots(self, id_):
 
-inherit_attributes = ["samplerate",
-                      "start_time",
-                      "end_time",
-                      ]
+        def get_parents(id_):
+            metadata = self.database.get_metadata(id_, "parents")
+            if (metadata is not None) and (len(metadata["parents"])):
+                for pid in metadata["parents"]:
+                    get_parents(pid)
+            else:
+                roots.append(id_)
 
+        roots = list()
+        get_parents(id_)
+        return roots
 
-class SoundTransform(object):
+    def reconstruct_individual(self, id_, root_ids):
 
-    def __init__(self, derived, original=None):
+        def get_waveform_ind(id_):
 
-        self.derived = derived
-        self.original = original
+            print("Attempting to get waveform for id %d" % id_)
+            metadata = self.database.get_metadata(id_)
+            if metadata is None:
+                raise KeyError("%d not in database!" % id_)
+            transform = metadata["type"].reconstruct
 
-    def transform(self, keep_annotations=[]):
-
-        if self.original is not None:
-            self._merge(keep_annotations)
-        return self.derived
-
-    def _merge(self, keep_annotations):
-        '''
-        Merge all the properties we want to keep from a previous Sound object.
-        :param other: A previous Sound object used to initialize this one.
-        '''
-
-        # Bring over all annotations from other...
-        for ka in keep_annotations:
             try:
-                self.original.annotations.pop(ka)
+                print("Attempting to get waveform from parents instead")
+                pids = metadata["parents"]
+                if len(pids):
+                    print("Attempting to reconstruct from %d parents" % len(pids))
+                    return transform([get_waveform_ind(pid) for pid in pids], metadata, manager=self)
+                else:
+                    raise KeyError
             except KeyError:
-                pass
+                # ipdb.set_trace()
+                print("parents not found in database for id %d. Attempting to reconstruct!" % id_)
+                # If this root id is not in root_ids, we want to replace the waveform with silence
+                silence = id_ not in root_ids
+                waveform = self.database.get_data(id_)
+                return transform(waveform, metadata, silence, manager=self)
 
-        self.derived.annotate(**self.original.annotations)
+        if not isinstance(root_ids, (list, tuple)):
+            root_ids = [root_ids]
 
-        # and any member variables that we want to keep.
-        for key in inherit_attributes:
-            if hasattr(self.original, key):
-                val = getattr(self.original, key)
-                setattr(self.derived, key, val)
+        roots = self.get_roots(id_)
+        root_ids = [root_id for root_id in root_ids if root_id in roots]
+        if len(root_ids) == 0:
+            print("Requested root_ids not roots for id %d" % id_)
+            return None
 
-class ReinitializeTransform(SoundTransform):
+        self.reconstruct_flag = True
+        sound = get_waveform_ind(id_)
+        sound.id = id_
+        self.reconstruct_flag = False
 
-    def __init__(self, *args, **kwargs):
+        return sound
 
-        super(ReinitializeTransform, self).__init__(*args, **kwargs)
-        self.derived = self.original.__class__(self.derived, merge_metadata=self.original)
+    def reconstruct(self, id_):
 
-    def transform(self, **kwargs):
+        self.reconstruct_flag = True
 
-        super(ReinitializeTransform, self).transform(**kwargs)
+        def get_waveform(id_):
 
-class AddTransform(SoundTransform):
-
-    def __init__(self, *args, **kwargs):
-
-        super(AddTransform, self).__init__(*args, **kwargs)
-
-    def transform(self):
-
-        pass
-
-class LevelTransform(SoundTransform):
-
-    def __init__(self, *args, **kwargs):
-
-        super(LevelTransform, self).__init__(*args, **kwargs)
-
-    def transform(self):
-
-        pass
-
-class ItemTransform(SoundTransform):
-
-    def __init__(self, *args, **kwargs):
-
-        super(ItemTransform, self).__init__(*args, **kwargs)
-
-    def _keydata(self, key):
-
-        if isinstance(key, (int, float)):
-            start = key / self.derived.samplerate
-            stop = None
-        elif isinstance(key, Quantity):
-            start = key
-            stop = None
-        elif isinstance(key, (slice, tuple)):
-            if isinstance(key, tuple):
-                key = key[0]
-
-            if key.start is None:
-                start = 0 * second
-            elif units.have_same_dimensions(key.start, second):
-                start = key.start
+            print("Attempting to get waveform for id %d" % id_)
+            metadata = self.database.get_metadata(id_)
+            if metadata is None:
+                raise KeyError("%d not in database!" % id_)
+            transform = metadata["type"].reconstruct
+            data = self.database.get_data(id_)
+            if data is not None:
+                return transform(data, metadata, manager=self)
             else:
-                start = key.start / self.derived.samplerate
+                try:
+                    print("Attempting to get waveform from parents instead")
+                    pids = metadata["parents"]
+                    if len(pids):
+                        print("Attempting to reconstruct from %d parents" % len(pids))
+                        return transform([get_waveform(pid) for pid in pids], metadata, manager=self)
+                    else:
+                        raise KeyError
+                except KeyError:
+                    print("parents not found in database for id %d. Attempting to reconstruct!" % id_)
+                    waveform = self.database.get_data(id_)
+                    return transform(waveform, metadata, manager=self)
 
-            if key.stop is None:
-                stop = self.derived.duration
-            elif units.have_same_dimensions(key.stop, second):
-                stop = key.stop
-            else:
-                stop = key.stop / self.derived.samplerate
-        else:
-            raise TypeError("__getitem__ key is of an unexpected type: %s." % str(type(key)))
-
-        return start, stop
-
-
-class SliceTransform(ReinitializeTransform, ItemTransform):
-
-    def __init__(self, *args, **kwargs):
-
-        super(SliceTransform, self).__init__(*args, **kwargs)
-
-    def transform(self, key=None, start=None, stop=None, **kwargs):
-
-        if key is not None:
-            start, stop = self._keydata(key)
-
-        self._clip_times(start, stop)
-        # super(SliceTransform, self).transform(keep_annotations=["original_start_time", "original_end_time"])
-
-        return self.derived
-
-    def _clip_times(self, start=0*second, stop=None):
-
-        if stop is None:
-            stop = start
-
-        # Check that the attributes exist:
-        # if "original_start_time" not in self.derived.annotations:
-        #     self.derived.annotate(original_start_time=0*second)
-
-        # Get the difference between slice start time and start time for current waveform
-        delta = (start - self.derived.start_time)
-        # If delta > 0, we are indexing into this components waveform
-        self.derived.annotations["original_start_time"] += max(delta, 0 * second)
-        # If we are indexing into this component, the new start time is 0, otherwise it's -delta
-        self.derived.start_time = max(-delta, 0 * second)
-
-        # Get the difference between slice stop time and the stop time for the current waveform
-        delta = (stop - self.derived.end_time)
-        # If delta < 0, then we are indexing into this component's waveform
-        self.derived.annotations["original_end_time"] -= max(-delta, 0 * second)
-        # If delta is < 0, then the component indexes to the end of the waveform
-        self.derived.end_time = min(self.derived.end_time - start, self.derived.duration)
+        sound = get_waveform(id_)
+        sound.id = id_
+        sound.annotations.update(self.database.get_annotations(id_))
+        self.reconstruct_flag = False
+        return sound
 
 
-class ShiftTransform(ItemTransform):
-
-    def __init__(self, *args, **kwargs):
-
-        super(ShiftTransform, self).__init__(*args, **kwargs)
-
-    def transform(self, key=None, start=None, stop=None, **kwargs):
-
-        if key is not None:
-            start, stop = self._keydata(key)
-
-        self.derived.start_time += start
-        self.derived.end_time += start
-
-        super(ShiftTransform, self).transform(**kwargs)
-
-        return self.derived
-
-class RampTransform(SoundTransform):
-
-    def __init__(self, *args, **kwargs):
-
-        super(RampTransform, self).__init__(*args, **kwargs)
-
-    def transform(self):
-
-        pass
 
