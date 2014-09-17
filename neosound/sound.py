@@ -6,7 +6,7 @@ import random
 from functools import wraps
 import numpy as np
 from brian import second, hertz, Quantity, units
-from brian.hears import dB
+from brian.hears import dB, dB_type
 from brian.hears import Sound as BHSound
 from scipy.signal import firwin, filtfilt
 from lasp.signal import lowpass_filter, bandpass_filter, highpass_filter
@@ -65,6 +65,7 @@ class Sound(BHSound):
 
         # Create default attributes
         self.annotations = dict()
+        self.transformation = dict()
 
         if isinstance(sound, str):
             self.annotate(original_filename=sound)
@@ -87,15 +88,39 @@ class Sound(BHSound):
         if not hasattr(tmp, "id") and hasattr(self, "id"):
             tmp.id = self.id
         if context is not None:
-            if context[0].__name__ in ["divide", "multiply"]:
-                scalar = [val for val in context[1] if isinstance(val, (int, float, Quantity))]
+            context_type = context[0].__name__
+            context_values = context[1]
+            in_place = len(context_values) == 3
+            # in_place = False
+            # Most likely ufunc values are "divide", "multiply", "add", and "subtract"
+            used_types = ["divide", "multiply"]
+            if context_type in used_types:
+                scalar = [val for val in context_values if isinstance(val, (int, float, Quantity))]
+
+                # If this is a multiplication, a scalar would be changing the level
+                # Whereas a nonscalar would be something like an envelope
+                # Both should be permissible
                 if len(scalar):
                     scalar = scalar[0]
-                    if context[0].__name__ == "divide":
-                        scalar = 1 / scalar
-                    metadata = dict(type=MultiplyTransform,
-                                    coefficient=scalar)
+                    metadatas = dict(divide=dict(type=MultiplyTransform,
+                                                 coefficient=1 / scalar,
+                                                 ),
+                                     multiply=dict(type=MultiplyTransform,
+                                                   coefficient=scalar,
+                                                   ))
+                    metadata = metadatas[context_type]
+                    if in_place:
+                        metadata["type"] = InPlaceMultiplyTransform
+
                     tmp = self.manager.store(tmp, metadata, self)
+            #
+            #     if len(context_values) == 3:
+            #         print("This is an in-place transformation")
+            #     else:
+            #         print("This transformation creates a new object")
+            # #
+            # else:
+            #     print("Unexpected context type in __array_wrap__: %s" % context_type)
 
         return tmp
 
@@ -198,6 +223,28 @@ class Sound(BHSound):
     __iadd__ = __add__
     __isub__ = __sub__
 
+    def set_level(self, level):
+        '''
+        Sets level in dB SPL (RMS) assuming array is in Pascals. ``level``
+        should be a value in dB, or a tuple of levels, one for each channel.
+        '''
+
+        rms_dB = self.get_level()
+        if self.nchannels>1:
+            level = np.array(level)
+            if level.size==1:
+                level = level.repeat(self.nchannels)
+            level = np.reshape(level, (1, self.nchannels))
+            rms_dB = np.reshape(rms_dB, (1, self.nchannels))
+        else:
+            if not isinstance(level, dB_type):
+                raise dB_error('Must specify level in dB')
+            rms_dB = float(rms_dB)
+            level = float(level)
+        gain = 10**((level-rms_dB)/20.)
+
+        return self * gain
+
     def to_mono(self):
         '''
         Converts the Sound object from stereo to mono.
@@ -272,7 +319,7 @@ class Sound(BHSound):
     def envelope(self, min_power=0*dB):
 
         env = np.abs(np.asarray(self))
-        en
+
 
     def to_silence(self):
 
@@ -309,6 +356,12 @@ class Sound(BHSound):
                         duration=duration)
 
         return self.manager.store(padded.shifted(start), metadata, self)
+
+    def unpad(self, threshold=0):
+
+        inds = np.where(np.asarray(self) > threshold)[0]
+
+        return self[inds[0]: inds[-1]]
 
     def embed(self, other, start=None, max_start=None, min_start=0*second):
         '''

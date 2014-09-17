@@ -91,6 +91,7 @@ class SoundManager(object):
         return sound
 
     def reconstruct(self, id_):
+        from neosound.sound import Sound
 
         self.reconstruct_flag = True
 
@@ -103,7 +104,7 @@ class SoundManager(object):
             transform = metadata["type"].reconstruct
             data = self.database.get_data(id_)
             if data is not None:
-                return transform(data, metadata, manager=self)
+                return Sound(data, manager=self)
             else:
                 try:
                     print("Attempting to get waveform from parents instead")
@@ -121,6 +122,7 @@ class SoundManager(object):
         sound = get_waveform(id_)
         sound.id = id_
         sound.annotations.update(self.database.get_annotations(id_))
+        sound.transformation.update(self.database.get_metadata(id_))
         self.reconstruct_flag = False
         return sound
 

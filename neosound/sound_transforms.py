@@ -16,10 +16,11 @@ class SoundTransform(object):
 
         if self.original is not None:
             self.derived = self.original.__class__(self.derived,
-                                                   manager=self.original.manager)
+                                                   manager=self.manager)
 
         if not self.manager.reconstruct_flag:
             self.manager.database.store_metadata(self.derived.id, **self.metadata)
+            self.derived.transformation.update(self.metadata)
 
             if self.original is not None:
                 self.manager.database.store_metadata(self.derived.id, parents=[self.original.id])
@@ -37,8 +38,11 @@ class SoundTransform(object):
         metadata = self.manager.database.get_metadata(parent, "children")
         if metadata is None:
             children = list()
-        else:
+        elif "children" in metadata:
             children = metadata["children"]
+        else:
+            children = list()
+
         children.append(child)
         self.manager.database.store_metadata(parent, children=children)
 
@@ -183,6 +187,36 @@ class MultiplyTransform(SoundTransform):
         return coeff * sound
 
 
+class InPlaceMultiplyTransform(SoundTransform):
+
+    def store(self):
+
+        tmp = self.derived.__class__(self.derived,
+                                     manager=self.manager)
+
+        if not self.manager.reconstruct_flag:
+            self.manager.database.store_metadata(tmp.id, **self.metadata)
+            self.derived.transformation.update(self.metadata)
+            if self.original is not None:
+                self.manager.database.store_metadata(tmp.id, parents=[self.original.id])
+                self._update_children(self.original.id, tmp.id)
+
+            if self.save:
+                self.manager.database.store_data(tmp.id, asarray(self.derived))
+
+        self.derived.id = tmp.id
+
+    @staticmethod
+    def reconstruct(waveform, metadata, manager=None):
+        from neosound.sound import Sound
+
+        print("Reconstructing multiply transform")
+        sound = Sound(waveform, manager=manager)
+        coeff = metadata["coefficient"]
+
+        return coeff * sound
+
+
 class AddTransform(SoundTransform):
 
     def store(self):
@@ -193,6 +227,7 @@ class AddTransform(SoundTransform):
         if not self.manager.reconstruct_flag:
             self.manager.database.store_metadata(self.derived.id, **self.metadata)
             self.manager.database.store_metadata(self.derived.id, parents=ids)
+            self.derived.transformation.update(self.metadata)
             for orig_id in ids:
                 self._update_children(orig_id, self.derived.id)
 
@@ -217,13 +252,14 @@ class SetTransform(SoundTransform):
     def store(self):
 
         if not hasattr(self.original, "id"):
-            self.original = self.derived.__class__(self.original, initialize=True, manager=self.derived.manager)
+            self.original = self.derived.__class__(self.original, initialize=True, manager=self.manager)
 
         tmp = self.derived.__class__(self.derived,
-                                     manager=self.derived.manager)
+                                     manager=self.manager)
 
         if not self.manager.reconstruct_flag:
             self.manager.database.store_metadata(tmp.id, **self.metadata)
+            self.derived.transformation.update(self.metadata)
             if self.original is not None:
                 self.manager.database.store_metadata(tmp.id, parents=[self.derived.id, self.original.id])
                 self._update_children(self.derived.id, tmp.id)
@@ -244,4 +280,14 @@ class SetTransform(SoundTransform):
         sound[metadata["start_time"] * second: metadata["end_time"] * second] = replacement
 
         return sound
+
+
+class InPlaceTransform(SoundTransform):
+
+    def store(self):
+
+        self.derived = super(InPlaceTransform, self).store()
+        tmp = self.derived.__class__(self.derived,
+                                     manager=self.derived.manager)
+        self.derived.id = tmp.id
 
