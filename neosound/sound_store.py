@@ -74,7 +74,8 @@ class HDF5Store(object):
 
     def _get_group(self, f, group_name):
 
-        if group_name in self._ids:
+        # if group_name in self._ids:
+        if group_name in f:
             g = f[group_name]
         else:
             g = f.create_group(group_name)
@@ -129,7 +130,8 @@ class HDF5Store(object):
         id_ = unicode(id_)
 
         with h5py.File(self.filename, "r") as f:
-            if id_ in self._ids:
+            # if id_ in self._ids:
+            if id_ in f:
                 g = f[id_]
                 if len(args):
                     metadata = dict([(ss, g.attrs["transform_" + ss]) for ss in args if "transform_" + ss in
@@ -145,7 +147,7 @@ class HDF5Store(object):
 
                 return metadata
             else:
-                return None
+                return dict()
 
     def get_data(self, id_):
         id_ = unicode(id_)

@@ -282,6 +282,16 @@ class SetTransform(SoundTransform):
         return sound
 
 
+class ComponentTransform(SoundTransform):
+
+    @staticmethod
+    def reconstruct(waveforms, metadata, manager):
+        from neosound.sound import Sound
+
+        print("Reconstructing component")
+        return manager.reconstruct_individual(metadata["id"], metadata["root_id"])
+
+
 class InPlaceTransform(SoundTransform):
 
     def store(self):

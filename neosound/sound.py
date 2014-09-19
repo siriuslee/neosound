@@ -9,7 +9,7 @@ from brian import second, hertz, Quantity, units
 from brian.hears import dB, dB_type
 from brian.hears import Sound as BHSound
 from scipy.signal import firwin, filtfilt
-from lasp.signal import lowpass_filter, bandpass_filter, highpass_filter
+# from lasp.signal import lowpass_filter, bandpass_filter, highpass_filter
 try:
     from neo.core.baseneo import _check_annotations
 except ImportError:
@@ -46,10 +46,10 @@ class Sound(BHSound):
                           doc='A boolean describing if the sound is complete silence.')
     sampleperiod = property(fget=lambda self: 1 / self.samplerate,
                             doc='The time period for each sample (s).')
-    ncomponents = property(fget=lambda self: len(self.components),
+    ncomponents = property(fget=lambda self: len(self.roots),
                            doc="Number of components of this sound.")
-    components = property(fget=lambda self: self.manager.get_roots(self.id),
-                          doc="The ids for each root component of this sound.")
+    roots = property(fget=lambda self: self.manager.get_roots(self.id),
+                     doc="The ids for each root component of this sound.")
 
     def __new__(cls, sound, *args, **kwargs):
 
@@ -320,7 +320,6 @@ class Sound(BHSound):
 
         env = np.abs(np.asarray(self))
 
-
     def to_silence(self):
 
         return Sound.silence(duration=self.duration, nchannels=self.nchannels, samplerate=self.samplerate)
@@ -456,9 +455,20 @@ class Sound(BHSound):
 
     def component(self, n):
 
-        component_id = self.components[n]
+        component_id = self.roots[n]
 
         return self.manager.reconstruct_individual(self.id, component_id)
+
+    @property
+    def components(self):
+
+        components = list()
+        for root_id in self.roots:
+            component_id = self.manager.database.filter_ids(transform_id=self.id,
+                                                           transform_root_id=root_id)
+            components.extend(component_id)
+
+        return components
 
     def plot(self):
 

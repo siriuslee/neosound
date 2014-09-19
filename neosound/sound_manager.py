@@ -48,13 +48,13 @@ class SoundManager(object):
         get_parents(id_)
         return roots
 
-    def reconstruct_individual(self, id_, root_ids):
+    def reconstruct_individual(self, id_, root_id):
+        from neosound.sound import Sound
 
         def get_waveform_ind(id_):
-
             print("Attempting to get waveform for id %d" % id_)
             metadata = self.database.get_metadata(id_)
-            if metadata is None:
+            if len(metadata) == 0:
                 raise KeyError("%d not in database!" % id_)
             transform = metadata["type"].reconstruct
 
@@ -70,23 +70,39 @@ class SoundManager(object):
                 # ipdb.set_trace()
                 print("parents not found in database for id %d. Attempting to reconstruct!" % id_)
                 # If this root id is not in root_ids, we want to replace the waveform with silence
-                silence = id_ not in root_ids
+                silence = id_ != root_id
                 waveform = self.database.get_data(id_)
                 return transform(waveform, metadata, silence, manager=self)
 
-        if not isinstance(root_ids, (list, tuple)):
-            root_ids = [root_ids]
-
         roots = self.get_roots(id_)
-        root_ids = [root_id for root_id in root_ids if root_id in roots]
-        if len(root_ids) == 0:
-            print("Requested root_ids not roots for id %d" % id_)
+        if root_id not in roots:
+            print("Requested root_id not roots for id %d" % id_)
             return None
+
+        component_id = self.database.filter_ids(transform_id=id_,
+                                                transform_root_id=root_id)
+        if len(component_id):
+            store = False
+            component_id = component_id[0]
+            data = self.database.get_data(component_id)
+            if data is not None:
+                sound = Sound(data, manager=self)
+                sound.id = component_id
+                sound.annotations.update(self.database.get_annotations(component_id))
+                sound.transformation.update(self.database.get_metadata(component_id))
+
+                return sound
+        else:
+            store = True
+            metadata = dict(type=ComponentTransform,
+                            id=id_,
+                            root_id=root_id)
 
         self.reconstruct_flag = True
         sound = get_waveform_ind(id_)
-        sound.id = id_
         self.reconstruct_flag = False
+        if store:
+            sound = self.store(sound, metadata)
 
         return sound
 
@@ -99,7 +115,7 @@ class SoundManager(object):
 
             print("Attempting to get waveform for id %d" % id_)
             metadata = self.database.get_metadata(id_)
-            if metadata is None:
+            if len(metadata) == 0:
                 raise KeyError("%d not in database!" % id_)
             transform = metadata["type"].reconstruct
             data = self.database.get_data(id_)
