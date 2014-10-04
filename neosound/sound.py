@@ -1,15 +1,16 @@
 from __future__ import division, print_function
-from matplotlib import pyplot as plt
 import re
 import os
 import random
 from functools import wraps
+
+from matplotlib import pyplot as plt
 import numpy as np
 from brian import second, hertz, Quantity, units
 from brian.hears import dB, dB_type
 from brian.hears import Sound as BHSound
 from scipy.signal import firwin, filtfilt
-# from lasp.signal import lowpass_filter, bandpass_filter, highpass_filter
+
 try:
     from neo.core.baseneo import _check_annotations
 except ImportError:
@@ -33,8 +34,7 @@ def create_sound(func):
 
 class Sound(BHSound):
     '''
-    A representation of sounds that inherits and extends the wonderful brian.hears simulator. This is designed to
-    integrate with the python-neo neurophysiology data framework.
+    A representation of sounds that inherits and extends the wonderful brian.hears simulator. This is designed to integrate with the python-neo neurophysiology data framework.
     '''
 
     # Custom properties
@@ -70,7 +70,8 @@ class Sound(BHSound):
         if isinstance(sound, str):
             self.annotate(original_filename=sound)
             self.manager.store(self, dict(type=LoadTransform,
-                                          filename=sound), save=True)
+                                          filename=sound,
+                                          samplerate=self.samplerate), save=True)
         if initialize:
             self.manager.store(self, dict(type=InitTransform), save=True)
 
@@ -133,15 +134,15 @@ class Sound(BHSound):
     def __getitem__(self, key):
 
         key = self._rekey(key)
-        start, stop = self._keydata(key)
-        metadata = dict(type=SliceTransform,
-                        start_time=start,
-                        end_time=stop,
-                        )
         sliced = super(Sound, self).__getitem__(key)
         if isinstance(key, (int, float, Quantity)):
             return sliced
         else:
+            start, stop = self._keydata(key)
+            metadata = dict(type=SliceTransform,
+                            start_time=float(start),
+                            end_time=float(stop),
+                            )
             return self.manager.store(sliced, metadata, self)
 
     def __setitem__(self, key, value):
@@ -149,15 +150,15 @@ class Sound(BHSound):
         key = self._rekey(key)
         start, stop = self._keydata(key)
         metadata = dict(type=SetTransform,
-                        start_time=start,
-                        end_time=stop)
+                        start_time=float(start),
+                        end_time=float(stop))
         super(Sound, self).__setitem__(key, value)
         return self.manager.store(self, metadata, value)
 
     def _rekey(self, key):
         if not isinstance(key, (tuple, slice)):
             if isinstance(key, Quantity):
-                key *= self.sampleperiod
+                key *= self.samplerate
                 key = int(np.rint(key))
             return key
 
@@ -415,6 +416,7 @@ class Sound(BHSound):
         return self[start: stop]
 
     def clip(self, min_val, max_val):
+        # min_val should default to None and then be given the value of negative max_val
 
         metadata = dict(type=ClipTransform,
                         min_value=min_val,

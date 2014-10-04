@@ -1,18 +1,27 @@
+import logging
+import os
+
 import numpy as np
+
 from neosound.sound_store import *
 from neosound.sound_transforms import *
 
+this_dir, this_filename = os.path.split(__file__)
+data_dir = os.path.join(this_dir, "..", "data")
 
 class SoundManager(object):
+    _default_database = SoundStore()
+    logger = logging.Logger(os.path.join(data_dir, "sound_log"), level=30)
 
     def __init__(self, database=None, filename=None):
 
         if database is None:
-            self.database = SoundStore()
+            self.database = self._default_database
         else:
             # Create temporary database filename
             # if filename is None:
             self.database = database(filename)
+            self._default_database = self.database
 
         self.ids = self.database.list_ids()
         self.reconstruct_flag = False
@@ -52,23 +61,23 @@ class SoundManager(object):
         from neosound.sound import Sound
 
         def get_waveform_ind(id_):
-            print("Attempting to get waveform for id %d" % id_)
+            self.logger.debug("Attempting to get waveform for id %d" % id_)
             metadata = self.database.get_metadata(id_)
             if len(metadata) == 0:
                 raise KeyError("%d not in database!" % id_)
             transform = metadata["type"].reconstruct
 
             try:
-                print("Attempting to get waveform from parents instead")
+                self.logger.debug("Attempting to get waveform from parents instead")
                 pids = metadata["parents"]
                 if len(pids):
-                    print("Attempting to reconstruct from %d parents" % len(pids))
+                    self.logger.debug("Attempting to reconstruct from %d parents" % len(pids))
                     return transform([get_waveform_ind(pid) for pid in pids], metadata, manager=self)
                 else:
                     raise KeyError
             except KeyError:
                 # ipdb.set_trace()
-                print("parents not found in database for id %d. Attempting to reconstruct!" % id_)
+                self.logger.debug("parents not found in database for id %d. Attempting to reconstruct!" % id_)
                 # If this root id is not in root_ids, we want to replace the waveform with silence
                 silence = id_ != root_id
                 waveform = self.database.get_data(id_)
@@ -76,7 +85,7 @@ class SoundManager(object):
 
         roots = self.get_roots(id_)
         if root_id not in roots:
-            print("Requested root_id not roots for id %d" % id_)
+            self.logger.debug("Requested root_id not roots for id %d" % id_)
             return None
 
         component_id = self.database.filter_ids(transform_id=id_,
@@ -113,7 +122,7 @@ class SoundManager(object):
 
         def get_waveform(id_):
 
-            print("Attempting to get waveform for id %d" % id_)
+            self.logger.debug("Attempting to get waveform for id %d" % id_)
             metadata = self.database.get_metadata(id_)
             if len(metadata) == 0:
                 raise KeyError("%d not in database!" % id_)
@@ -123,15 +132,15 @@ class SoundManager(object):
                 return Sound(data, manager=self)
             else:
                 try:
-                    print("Attempting to get waveform from parents instead")
+                    self.logger.debug("Attempting to get waveform from parents instead")
                     pids = metadata["parents"]
                     if len(pids):
-                        print("Attempting to reconstruct from %d parents" % len(pids))
+                        self.logger.debug("Attempting to reconstruct from %d parents" % len(pids))
                         return transform([get_waveform(pid) for pid in pids], metadata, manager=self)
                     else:
                         raise KeyError
                 except KeyError:
-                    print("parents not found in database for id %d. Attempting to reconstruct!" % id_)
+                    self.logger.debug("parents not found in database for id %d. Attempting to reconstruct!" % id_)
                     waveform = self.database.get_data(id_)
                     return transform(waveform, metadata, manager=self)
 
