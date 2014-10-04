@@ -95,7 +95,9 @@ class SoundManager(object):
             component_id = component_id[0]
             data = self.database.get_data(component_id)
             if data is not None:
-                sound = Sound(data, manager=self)
+                # Should probably check if this is not there
+                samplerate = self.database.get_annotations(component_id)["samplerate"]
+                sound = Sound(data, samplerate=samplerate * hertz, manager=self)
                 sound.id = component_id
                 sound.annotations.update(self.database.get_annotations(component_id))
                 sound.transformation.update(self.database.get_metadata(component_id))
@@ -129,7 +131,9 @@ class SoundManager(object):
             transform = metadata["type"].reconstruct
             data = self.database.get_data(id_)
             if data is not None:
-                return Sound(data, manager=self)
+                # Should probably do something if samplerate is not there
+                samplerate = self.database.get_annotations(id_)["samplerate"]
+                return Sound(data, samplerate=samplerate * hertz, manager=self)
             else:
                 try:
                     self.logger.debug("Attempting to get waveform from parents instead")

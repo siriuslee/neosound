@@ -66,6 +66,7 @@ class Sound(BHSound):
         # Create default attributes
         self.annotations = dict()
         self.transformation = dict()
+        self.annotate(samplerate=self.samplerate)
 
         if isinstance(sound, str):
             self.annotate(original_filename=sound)

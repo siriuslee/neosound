@@ -70,7 +70,7 @@ class LoadTransform(SoundTransform):
         from neosound.sound import Sound
 
         if waveform is not None:
-            sound = Sound(waveform, metadata["samplerate"], manager=manager)
+            sound = Sound(waveform, samplerate=metadata["samplerate"] * hertz, manager=manager)
         else:
             sound = Sound(metadata["filename"], manager=manager)
 
