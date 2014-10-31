@@ -16,6 +16,7 @@ class SoundTransform(object):
 
         if self.original is not None:
             self.derived = self.original.__class__(self.derived,
+                                                   samplerate=self.original.samplerate,
                                                    manager=self.manager)
 
         if not self.manager.reconstruct_flag:
@@ -53,8 +54,13 @@ class InitTransform(SoundTransform):
     def reconstruct(waveform, metadata, silence=False, manager=None):
         from neosound.sound import Sound
 
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
         if waveform is not None:
-            sound = Sound(waveform, manager=manager)
+            sound = Sound(waveform, samplerate=samplerate, manager=manager)
 
         if silence:
             manager.logger.debug("Returning silence instead")
@@ -69,8 +75,13 @@ class LoadTransform(SoundTransform):
     def reconstruct(waveform, metadata, silence=False, manager=None):
         from neosound.sound import Sound
 
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
         if waveform is not None:
-            sound = Sound(waveform, samplerate=metadata["samplerate"] * hertz, manager=manager)
+            sound = Sound(waveform, samplerate=samplerate, manager=manager)
         else:
             sound = Sound(metadata["filename"], manager=manager)
 
@@ -87,8 +98,13 @@ class CreateTransform(SoundTransform):
     def reconstruct(waveform, metadata, silence=False, manager=None):
         from neosound.sound import Sound
 
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
         if waveform is not None:
-            sound = Sound(waveform, manager=manager)
+            sound = Sound(waveform, samplerate=samplerate, manager=manager)
         else:
             create = getattr(Sound, metadata["sound"])
             metadata.pop("sound")
@@ -108,8 +124,13 @@ class MonoTransform(SoundTransform):
     def reconstruct(waveform, metadata, manager=None):
         from neosound.sound import Sound
 
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
         manager.logger.debug("Reconstructing mono transform")
-        sound = Sound(waveform, manager=manager)
+        sound = Sound(waveform, samplerate=samplerate, manager=manager)
 
         return sound.to_mono()
 
@@ -127,12 +148,54 @@ class FilterTransform(SoundTransform):
     def reconstruct(waveform, metadata, manager=None):
         from neosound.sound import Sound
 
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
         manager.logger.debug("Reconstructing filter transform")
-        sound = Sound(waveform, manager=manager)
+        sound = Sound(waveform, samplerate=samplerate, manager=manager)
 
         return sound.filter([metadata["min_frequency"] * hertz,
                              metadata["max_frequency"] * hertz],
                             filter_order=metadata["order"])
+
+
+class RampTransform(SoundTransform):
+
+    @staticmethod
+    def reconstruct(waveform, metadata, manager=None):
+        from neosound.sound import Sound
+
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
+        manager.logger.debug("Reconstructing ramp transform")
+        sound = Sound(waveform, samplerate=samplerate, manager=manager)
+        when = metadata["when"]
+        duration = metadata["duration"] * second
+
+        return sound.ramp(when=when, duration=duration)
+
+class ResampleTransform(SoundTransform):
+
+    @staticmethod
+    def reconstruct(waveform, metadata, manager=None):
+        from neosound.sound import Sound
+
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
+        manager.logger.debug("Reconstructing resample transform")
+        sound = Sound(waveform, samplerate=samplerate, manager=manager)
+        new_samplerate = metadata["new_samplerate"]
+        resample_type = metadata["resample_type"]
+
+        return sound.resample(samplerate, resample_type=resample_type)
 
 
 class PadTransform(SoundTransform):
@@ -142,7 +205,13 @@ class PadTransform(SoundTransform):
         from neosound.sound import Sound
 
         manager.logger.debug("Reconstructing pad transform")
-        sound = Sound(waveform, manager=manager)
+
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
+        sound = Sound(waveform, samplerate=samplerate, manager=manager)
         start = metadata["start_time"] * second
         duration = metadata["duration"] * second
 
@@ -156,7 +225,13 @@ class ClipTransform(SoundTransform):
         from neosound.sound import Sound
 
         manager.logger.debug("Reconstructing clip transform")
-        sound = Sound(waveform, manager=manager)
+
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
+        sound = Sound(waveform, samplerate=samplerate, manager=manager)
 
         return sound.clip(metadata["min_value"], metadata["max_value"])
 
@@ -168,8 +243,14 @@ class SliceTransform(SoundTransform):
         from neosound.sound import Sound
 
         manager.logger.debug("Reconstructing slice transform")
+
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
         waveform = waveform[0]
-        sound = Sound(waveform, manager=manager)
+        sound = Sound(waveform, samplerate=samplerate, manager=manager)
 
         return sound[metadata["start_time"] * second: metadata["end_time"] * second]
 
@@ -181,7 +262,13 @@ class MultiplyTransform(SoundTransform):
         from neosound.sound import Sound
 
         manager.logger.debug("Reconstructing multiply transform")
-        sound = Sound(waveform, manager=manager)
+
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
+        sound = Sound(waveform, samplerate=samplerate, manager=manager)
         coeff = metadata["coefficient"]
 
         return coeff * sound
@@ -211,7 +298,13 @@ class InPlaceMultiplyTransform(SoundTransform):
         from neosound.sound import Sound
 
         manager.logger.debug("Reconstructing multiply transform")
-        sound = Sound(waveform, manager=manager)
+
+        if hasattr(waveform, "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
+        sound = Sound(waveform, samplerate=samplerate, manager=manager)
         coeff = metadata["coefficient"]
 
         return coeff * sound
@@ -241,8 +334,14 @@ class AddTransform(SoundTransform):
         from neosound.sound import Sound
 
         manager.logger.debug("Reconstructing add transform")
-        sound0 = Sound(waveforms[0], manager=manager)
-        sound1 = Sound(waveforms[1], manager=manager)
+
+        if hasattr(waveforms[0], "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
+        sound0 = Sound(waveforms[0], samplerate=samplerate, manager=manager)
+        sound1 = Sound(waveforms[1], samplerate=samplerate, manager=manager)
 
         return sound0 + sound1
 
@@ -275,8 +374,14 @@ class SetTransform(SoundTransform):
         from neosound.sound import Sound
 
         manager.logger.debug("Reconstructing set transform")
-        sound = Sound(waveforms[0], manager=manager)
-        replacement = Sound(waveforms[1], manager=manager)
+
+        if hasattr(waveforms[0], "samplerate"):
+            samplerate = waveform.samplerate
+        else:
+            samplerate = metadata["samplerate"] * hertz
+
+        sound = Sound(waveforms[0], samplerate=samplerate, manager=manager)
+        replacement = Sound(waveforms[1], samplerate=samplerate, manager=manager)
         sound[metadata["start_time"] * second: metadata["end_time"] * second] = replacement
 
         return sound
@@ -289,15 +394,5 @@ class ComponentTransform(SoundTransform):
         from neosound.sound import Sound
 
         manager.logger.debug("Reconstructing component")
+
         return manager.reconstruct_individual(metadata["id"], metadata["root_id"])
-
-
-class InPlaceTransform(SoundTransform):
-
-    def store(self):
-
-        self.derived = super(InPlaceTransform, self).store()
-        tmp = self.derived.__class__(self.derived,
-                                     manager=self.derived.manager)
-        self.derived.id = tmp.id
-

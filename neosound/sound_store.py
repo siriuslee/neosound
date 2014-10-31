@@ -158,7 +158,7 @@ class HDF5Store(object):
             except KeyError:
                 return None
 
-    def filter_ids(self, **kwargs):
+    def filter_ids(self, num_matches=None, **kwargs):
 
         result_ids = list()
         with h5py.File(self.filename, "r") as f:
@@ -174,6 +174,9 @@ class HDF5Store(object):
                         break
                 if match:
                     result_ids.append(int(name))
+
+                if (num_matches is not None) and (len(result_ids) == num_matches):
+                    break
 
         return result_ids
 
@@ -200,6 +203,18 @@ class HDF5Store(object):
 
         with h5py.File(self.filename, "r") as f:
             return [int(kk) for kk in f.keys()]
+
+    def list_annotation_values(self, key):
+
+        values = list()
+        with h5py.File(self.filename, "r") as f:
+            for name, group in f.iteritems():
+                if key in group.attrs:
+                    value = group.attrs[key]
+                    if value not in values:
+                        values.append(value)
+
+        return values
 
     def list_roots(self):
 

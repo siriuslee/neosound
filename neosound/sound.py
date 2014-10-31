@@ -6,7 +6,7 @@ from functools import wraps
 
 from matplotlib import pyplot as plt
 import numpy as np
-from brian import second, hertz, Quantity, units
+from brian import second, hertz, Quantity, units, msecond
 from brian.hears import dB, dB_type
 from brian.hears import Sound as BHSound
 from scipy.signal import firwin, filtfilt
@@ -55,13 +55,17 @@ class Sound(BHSound):
 
         kwargs.pop("manager", None)
         kwargs.pop("initialize", None)
+        kwargs.pop("save", None)
 
         return BHSound.__new__(cls, sound, *args, **kwargs)
 
-    def __init__(self, sound, manager=SoundManager(), initialize=False, **kwargs):
+    def __init__(self, sound, manager=SoundManager(), save=True, initialize=False, **kwargs):
 
         self.manager = manager
         self.id = self.manager.get_id()
+
+        if hasattr(sound, "samplerate"):
+            self.samplerate = sound.samplerate
 
         # Create default attributes
         self.annotations = dict()
@@ -72,9 +76,9 @@ class Sound(BHSound):
             self.annotate(original_filename=sound)
             self.manager.store(self, dict(type=LoadTransform,
                                           filename=sound,
-                                          samplerate=self.samplerate), save=True)
+                                          samplerate=self.samplerate), save=save)
         if initialize:
-            self.manager.store(self, dict(type=InitTransform), save=True)
+            self.manager.store(self, dict(type=InitTransform), save=save)
 
     def annotate(self, **annotations):
 
@@ -115,14 +119,6 @@ class Sound(BHSound):
                         metadata["type"] = InPlaceMultiplyTransform
 
                     tmp = self.manager.store(tmp, metadata, self)
-            #
-            #     if len(context_values) == 3:
-            #         print("This is an in-place transformation")
-            #     else:
-            #         print("This transformation creates a new object")
-            # #
-            # else:
-            #     print("Unexpected context type in __array_wrap__: %s" % context_type)
 
         return tmp
 
@@ -254,7 +250,9 @@ class Sound(BHSound):
         '''
         if self.ndim > 1:
             metadata = dict(type=MonoTransform)
-            data = self.mean(axis=1).reshape((-1, 1))
+            data = Sound(self.mean(axis=1).reshape((-1, 1)),
+                         samplerate=self.samplerate,
+                         manager=self.manager)
             return self.manager.store(data, metadata, self)
 
         return self
@@ -322,9 +320,60 @@ class Sound(BHSound):
 
         env = np.abs(np.asarray(self))
 
+    def ramp(self, when="both", duration=10*msecond, envelope=None):
+        '''
+        Adds a ramp on/off to the sound
+
+        when='onset' - Can take values 'onset', 'offset' or 'both'
+        duration=10*ms - The time over which the ramping happens
+        envelope=None - A ramping function, if not specified uses ``sin(pi*t/2)**2``.
+        The function should be a function of one variable ``t`` ranging from
+        0 to 1, and should increase from ``f(0)=0`` to ``f(0)=1``. The
+        reverse is applied for the offset ramp. Currently the default type
+        is the only one supported for storage.
+
+        :param when:
+        :param duration:
+        :param envelope:
+        :return:
+        '''
+
+        ramped = super(Sound, self).ramp(when=when, duration=duration, envelope=envelope, inplace=False)
+        metadata = dict(type=RampTransform,
+                        when=when,
+                        duration=duration)
+
+        return self.manager.store(ramped, metadata, self)
+
+    def resample(self, samplerate, resample_type="sinc_best"):
+        '''
+        Returns a resampled version of the sound.
+        '''
+
+        if samplerate == self.samplerate:
+            return self
+
+        resampled = super(Sound, self).resample(samplerate, resample_type=resample_type)
+        metadata = dict(type=ResampleTransform,
+                        new_samplerate=samplerate,
+                        resample_type=resample_type)
+
+        return self.manager.store(resampled, metadata, self)
+
     def to_silence(self):
 
         return Sound.silence(duration=self.duration, nchannels=self.nchannels, samplerate=self.samplerate)
+
+    def to_spectrum_matched_noise(self, duration=None):
+
+        if duration is None:
+            duration = self.duration
+
+        next2 = lambda x: 2 ** (np.ceil(np.log2(x)))
+        pad_duration = next2(int(duration * self.samplerate)) * self.sampleperiod
+        spectrum = np.fft.fft(self.pad(pad_duration, start=0*second), axis=0)
+
+        return Sound.spectrum_matched_noise(spectrum, samplerate=self.samplerate, manager=self.manager)[:duration].set_level(self.level)
 
     def _round_time(self, time):
 
@@ -364,13 +413,14 @@ class Sound(BHSound):
 
         return self[inds[0]: inds[-1]]
 
-    def embed(self, other, start=None, max_start=None, min_start=0*second):
+    def embed(self, other, start=None, max_start=None, min_start=0*second, ratio=None):
         '''
         Embeds the current Sound object in other at a prespecified or random time.
         :param other: A Sound object into which the current Sound object will be embedded
         :param start: Prespecified start time for the Sound object in embedded Sound object
         :param min_start, max_start: Start time will be chosen from a uniform distribution between these two values
         if start is not a provided argument.
+        :param ratio: The level ratio of self to other in decibels. If None (default), then the levels are left alone
         :return: A Sound object with the current Sound object and other Sound object as components
         '''
 
@@ -378,6 +428,9 @@ class Sound(BHSound):
             if max_start is None:
                 max_start = max(other.duration - self.duration, 0 * second)
             start = random.uniform(min_start, max_start)
+
+        if ratio is not None:
+            other = other.set_level(self.level - ratio)
 
         stop = start + self.duration
         duration = max(stop, other.duration)
@@ -411,7 +464,7 @@ class Sound(BHSound):
                 max_start = self.duration - duration
             start = random.uniform(min_start, max_start)
             start = self._round_time(start)
-            start = max(start, self.duration - duration)
+            start = min(start, self.duration - duration)
             stop = start + duration
 
         return self[start: stop]
@@ -487,6 +540,28 @@ class Sound(BHSound):
      #def sequence(sounds, duration=10*second, ISIs=None):
 
     # Wrappers for particular sound types
+    @staticmethod
+    def spectrum_matched_noise(spectrum, samplerate=44100*hertz, manager=SoundManager()):
+
+        if len(spectrum.shape) == 1:
+            spectrum = np.reshape(spectrum, -1, 1)
+
+        mag = np.abs(spectrum)
+        n = len(mag)
+        n2 = int(n / 2)
+        phase = np.ones(mag.shape, dtype=complex)
+        if n % 2 == 1:
+            phase[1: n2 + 1, :] = np.exp(1j * np.random.uniform(-np.pi, np.pi, (n2, phase.shape[1])))
+            phase[n2 + 1:, :] = np.flipud(np.conj(phase[1: n2 + 1, :]))
+        else:
+            phase[1: n2 + 1, :] = np.exp(1j * np.random.uniform(-np.pi, np.pi, (n2, phase.shape[1])))
+            phase[n2 + 1:, :] = np.flipud(np.conj(phase[1: n2, :]))
+
+        z = mag * phase
+        noise = Sound(np.fft.ifft(z, axis=0).real, samplerate=samplerate, manager=manager)
+
+        return noise
+
     @classmethod
     @create_sound
     def tone(cls, *args, **kwargs):

@@ -9,6 +9,7 @@ from neosound.sound_transforms import *
 this_dir, this_filename = os.path.split(__file__)
 data_dir = os.path.join(this_dir, "..", "data")
 
+
 class SoundManager(object):
     _default_database = SoundStore()
     logger = logging.Logger(os.path.join(data_dir, "sound_log"), level=30)
