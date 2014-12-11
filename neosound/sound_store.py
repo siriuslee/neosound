@@ -68,7 +68,8 @@ class HDF5Store(object):
     def __init__(self, filename, *args, **kwargs):
 
         self.filename = filename
-        f = h5py.File(self.filename, "a")
+
+        f = h5py.File(self.filename, "r")
         self._ids = f.keys() # _ids is used as a hack to get around an annoying segfault
         f.close()
 
