@@ -68,10 +68,10 @@ class HDF5Store(object):
     def __init__(self, filename, *args, **kwargs):
 
         self.filename = filename
+        self.read_only = 'read_only' in kwargs and kwargs['read_only']
 
-        f = h5py.File(self.filename, "r")
-        self._ids = f.keys() # _ids is used as a hack to get around an annoying segfault
-        f.close()
+        with h5py.File(self.filename, "r") as f:
+            self._ids = f.keys() # _ids is used as a hack to get around an annoying segfault
 
     def _get_group(self, f, group_name):
 
@@ -84,6 +84,9 @@ class HDF5Store(object):
         return g
 
     def store_annotations(self, id_, **kwargs):
+        if self.read_only:
+            return
+
         id_ = unicode(id_)
 
         with h5py.File(self.filename, "a") as f:
@@ -102,6 +105,9 @@ class HDF5Store(object):
                 return dict()
 
     def store_metadata(self, id_, **kwargs):
+        if self.read_only:
+            return
+
         id_ = unicode(id_)
 
         if "type" in kwargs:
@@ -116,6 +122,9 @@ class HDF5Store(object):
                 g.attrs[key] = value
 
     def store_data(self, id_, data, overwrite=True):
+        if self.read_only:
+            return
+
         id_ = unicode(id_)
 
         with h5py.File(self.filename, "a") as f:

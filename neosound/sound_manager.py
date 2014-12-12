@@ -14,14 +14,20 @@ class SoundManager(object):
     _default_database = SoundStore()
     logger = logging.Logger(os.path.join(data_dir, "sound_log"), level=30)
 
-    def __init__(self, database=None, filename=None):
+    def __init__(self, database=None, filename=None, db_args=dict()):
+        """ Initialize a SoundManager object.
+
+        :param database: A subclass of SoundStore responsible for persisting sounds toa  file.
+        :param filename: The name of the sound file.
+        :param db_args: A dictionary of arguments that will be passed to the constructor of database.
+        """
 
         if database is None:
             self.database = self._default_database
         else:
             # Create temporary database filename
             # if filename is None:
-            self.database = database(filename)
+            self.database = database(filename, **db_args)
             self._default_database = self.database
 
         self.ids = self.database.list_ids()
