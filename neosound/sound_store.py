@@ -1,5 +1,7 @@
 import copy
 import h5py
+import os
+
 from neosound import sound_transforms
 
 
@@ -70,8 +72,13 @@ class HDF5Store(object):
         self.filename = filename
         self.read_only = 'read_only' in kwargs and kwargs['read_only']
 
-        with h5py.File(self.filename, "r") as f:
-            self._ids = f.keys() # _ids is used as a hack to get around an annoying segfault
+        if not os.path.exists(self.filename):
+            with h5py.File(self.filename, "w") as f:
+                self._ids = f.keys() # _ids is used as a hack to get around an annoying segfault
+        else:
+            with h5py.File(self.filename, "r") as f:
+                self._ids = f.keys()
+
 
     def _get_group(self, f, group_name):
 
