@@ -18,6 +18,37 @@ except ImportError:
 from neosound.sound_manager import *
 
 
+def soundstore(func):
+    '''
+    Every function that should store transform parameters will output a tuple of the format
+    (transformed object, other outputs, transform metadata)
+    :param func:
+    :return:
+    '''
+
+    @wraps(func)
+    def store(obj, *args, **kwargs):
+
+        result = func(obj, *args, **kwargs)
+
+        # result does not conform to the storage pattern. Just return it.
+        if not isinstance(result, tuple):
+            return result
+
+        transformed = result[0]
+        metadata = result[-1]
+
+        # storage is writeable
+        if not (obj.manager.read_only or kwargs.get("read_only", False)):
+            transformed = obj.manager.store(transformed, metadata, obj)
+
+        if len(result) > 2:
+            transformed = (transformed, ) + result[1: -1]
+
+        return transformed
+
+    return store
+
 def create_sound(func):
 
     @wraps(func)
@@ -42,8 +73,6 @@ class Sound(BHSound):
                          doc='The number of channels in the sound.')
     nyquist_frequency = property(fget=lambda self: self.samplerate / 2,
                                  doc='The maximum frequency possible in the sound.')
-    is_silence = property(fget=lambda self: np.all([len(ss) == 0 for ss in self.nonzero()]),
-                          doc='A boolean describing if the sound is complete silence.')
     sampleperiod = property(fget=lambda self: 1 / self.samplerate,
                             doc='The time period for each sample (s).')
     ncomponents = property(fget=lambda self: len(self.roots),
@@ -70,6 +99,7 @@ class Sound(BHSound):
         # Create default attributes
         self.annotations = dict()
         self.transformation = dict()
+
         self.annotate(samplerate=self.samplerate)
 
         if isinstance(sound, str):
@@ -93,32 +123,32 @@ class Sound(BHSound):
             tmp.manager = self.manager
         if not hasattr(tmp, "id") and hasattr(self, "id"):
             tmp.id = self.id
-        if context is not None:
-            context_type = context[0].__name__
-            context_values = context[1]
-            in_place = len(context_values) == 3
-            # in_place = False
-            # Most likely ufunc values are "divide", "multiply", "add", and "subtract"
-            used_types = ["divide", "multiply"]
-            if context_type in used_types:
-                scalar = [val for val in context_values if isinstance(val, (int, float, Quantity))]
-
-                # If this is a multiplication, a scalar would be changing the level
-                # Whereas a nonscalar would be something like an envelope
-                # Both should be permissible
-                if len(scalar):
-                    scalar = scalar[0]
-                    metadatas = dict(divide=dict(type=MultiplyTransform,
-                                                 coefficient=1 / scalar,
-                                                 ),
-                                     multiply=dict(type=MultiplyTransform,
-                                                   coefficient=scalar,
-                                                   ))
-                    metadata = metadatas[context_type]
-                    if in_place:
-                        metadata["type"] = InPlaceMultiplyTransform
-
-                    tmp = self.manager.store(tmp, metadata, self)
+        # if context is not None:
+        #     context_type = context[0].__name__
+        #     context_values = context[1]
+        #     in_place = len(context_values) == 3
+        #     # in_place = False
+        #     # Most likely ufunc values are "divide", "multiply", "add", and "subtract"
+        #     used_types = ["divide", "multiply"]
+        #     if context_type in used_types:
+        #         scalar = [val for val in context_values if isinstance(val, (int, float, Quantity))]
+        #
+        #         # If this is a multiplication, a scalar would be changing the level
+        #         # Whereas a nonscalar would be something like an envelope
+        #         # Both should be permissible
+        #         if len(scalar):
+        #             scalar = scalar[0]
+        #             metadatas = dict(divide=dict(type=MultiplyTransform,
+        #                                          coefficient=1 / scalar,
+        #                                          ),
+        #                              multiply=dict(type=MultiplyTransform,
+        #                                            coefficient=scalar,
+        #                                            ))
+        #             metadata = metadatas[context_type]
+        #             if in_place:
+        #                 metadata["type"] = InPlaceMultiplyTransform
+        #
+        #             tmp = self.manager.store(tmp, metadata, self)
 
         return tmp
 
@@ -199,6 +229,7 @@ class Sound(BHSound):
 
         return start, stop
 
+    @soundstore
     def __add__(self, other):
         '''
         Adds together self and other. First it ensures that they have the same duration, which seems like a more
@@ -211,8 +242,10 @@ class Sound(BHSound):
             print("Duration of the summed sounds must be identical")
             return
         summed = super(Sound, self).__add__(other)
-        metadata = dict(type=AddTransform)
-        return self.manager.store(summed, metadata, [self, other])
+
+        metadata = dict(type=AddTransform,
+                        parents=[self.id, other.id])
+        return summed, metadata
 
     def __sub__(self, other):
 
@@ -221,6 +254,7 @@ class Sound(BHSound):
     __iadd__ = __add__
     __isub__ = __sub__
 
+    @soundstore
     def set_level(self, level):
         '''
         Sets level in dB SPL (RMS) assuming array is in Pascals. ``level``
@@ -241,22 +275,28 @@ class Sound(BHSound):
             level = float(level)
         gain = 10**((level-rms_dB)/20.)
 
-        return self * gain
+        metadata = dict(type=MultiplyTransform,
+                        scalar=gain)
 
+        return self * gain, metadata
+
+    @soundstore
     def to_mono(self):
         '''
         Converts the Sound object from stereo to mono.
         :return: Mono Sound object
         '''
         if self.ndim > 1:
-            metadata = dict(type=MonoTransform)
             data = Sound(self.mean(axis=1).reshape((-1, 1)),
                          samplerate=self.samplerate,
                          manager=self.manager)
-            return self.manager.store(data, metadata, self)
+
+            metadata = dict(type=MonoTransform)
+            return data, metadata
 
         return self
 
+    @soundstore
     def filter(self, frequency_range=None, filter_order=None):
         '''
         Filters the sound within a particular frequency range. Depending on the values supplied, a lowpass, highpass,
@@ -278,10 +318,7 @@ class Sound(BHSound):
         if filter_order * 3 >= self.nsamples:
             raise ValueError("filter_order cannot be greater than nsamples / 3: 3 * %d > %d" % (filter_order, self.nsamples))
 
-        metadata = dict(type=FilterTransform,
-                        min_frequency=frequency_range[0],
-                        max_frequency=frequency_range[1],
-                        order=filter_order)
+
 
         if frequency_range[0] == 0:
             if frequency_range[1] < self.nyquist_frequency:
@@ -300,26 +337,18 @@ class Sound(BHSound):
         a = np.zeros(b.shape)
         a[0] = 1
         data = filtfilt(b, a, self, axis=0)
-        # if frequency_range[0] == 0:
-        #     if frequency_range[1] < self.nyquist_frequency:
-        #         filt = lambda self: lowpass_filter(np.asarray(self).squeeze(), self.samplerate, frequency_range[1], filter_order=filter_order)
-        #     else:
-        #         return self
-        # elif frequency_range[1] == self.nyquist_frequency:
-        #     filt = lambda self: highpass_filter(np.asarray(self).squeeze(), self.samplerate, frequency_range[0], filter_order=filter_order)
-        # else:
-        #     filt = lambda self: bandpass_filter(np.asarray(self).squeeze(), self.samplerate, frequency_range[0], frequency_range[1], filter_order=filter_order)
-        #
-        # data = list()
-        # for ch in xrange(self.nchannels):
-        #     data.append(filt(self.channel(ch)))
-        #
-        return self.manager.store(data, metadata, self)
+
+        metadata = dict(type=FilterTransform,
+                        min_frequency=frequency_range[0],
+                        max_frequency=frequency_range[1],
+                        order=filter_order)
+        return data, metadata
 
     def envelope(self, min_power=0*dB):
 
         env = np.abs(np.asarray(self))
 
+    @soundstore
     def ramp(self, when="both", duration=10*msecond, envelope=None):
         '''
         Adds a ramp on/off to the sound
@@ -339,12 +368,13 @@ class Sound(BHSound):
         '''
 
         ramped = super(Sound, self).ramp(when=when, duration=duration, envelope=envelope, inplace=False)
+
         metadata = dict(type=RampTransform,
                         when=when,
                         duration=duration)
+        return ramped, metadata
 
-        return self.manager.store(ramped, metadata, self)
-
+    @soundstore
     def resample(self, samplerate, resample_type="sinc_best"):
         '''
         Returns a resampled version of the sound.
@@ -354,11 +384,11 @@ class Sound(BHSound):
             return self
 
         resampled = super(Sound, self).resample(samplerate, resample_type=resample_type)
+
         metadata = dict(type=ResampleTransform,
                         new_samplerate=samplerate,
                         resample_type=resample_type)
-
-        return self.manager.store(resampled, metadata, self)
+        return resampled, metadata
 
     def to_silence(self):
 
@@ -379,6 +409,7 @@ class Sound(BHSound):
 
         return int(time * self.samplerate) * self.sampleperiod
 
+    @soundstore
     def pad(self, duration, start=None, max_start=None, min_start=0*second):
         '''
         Pads the sound with silence. All units are in seconds.
@@ -401,11 +432,11 @@ class Sound(BHSound):
 
         stop = start + self.duration
         padded = self.extended(duration - stop)
+
         metadata = dict(type=PadTransform,
                         start_time=start,
                         duration=duration)
-
-        return self.manager.store(padded.shifted(start), metadata, self)
+        return padded.shifted(start), metadata
 
     def unpad(self, threshold=0):
 
@@ -469,15 +500,18 @@ class Sound(BHSound):
 
         return self[start: stop]
 
-    def clip(self, min_val, max_val):
+    @soundstore
+    def clip(self, max_val, min_val=None):
         # min_val should default to None and then be given the value of negative max_val
+
+        if min_val is None:
+            min_val = -max_val
+        clipped = super(Sound, self).clip(min_val, max_val)
 
         metadata = dict(type=ClipTransform,
                         min_value=min_val,
                         max_value=max_val)
-        clipped = super(Sound, self).clip(min_val, max_val)
-
-        return self.manager.store(clipped, metadata, original=self)
+        return clipped, metadata
 
     def get_power_nonsilence(self, silence_threshold=.1):
 

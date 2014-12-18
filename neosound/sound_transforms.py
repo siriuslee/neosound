@@ -14,41 +14,42 @@ class SoundTransform(object):
 
     def store(self):
 
-        if self.original is not None:
-            self.derived = self.original.__class__(self.derived,
-                                                   samplerate=self.original.samplerate,
-                                                   manager=self.manager)
+        self.derived = self.original.__class__(self.derived,
+                                               manager=self.manager)
 
-        if not self.manager.reconstruct_flag:
-            self.manager.database.store_metadata(self.derived.id, **self.metadata)
-            self.derived.transformation.update(self.metadata)
+        if "parents" not in metadata:
+            metadata["parents"] = [self.original.id]
 
-            if self.original is not None:
-                self.manager.database.store_metadata(self.derived.id, parents=[self.original.id])
-                self._update_children(self.original.id, self.derived.id)
-            else:
-                self.manager.database.store_metadata(self.derived.id, parents=[])
+        self.manager.database.store_metadata(self.derived.id, **self.metadata)
+        self.derived.transformation.update(self.metadata)
 
-            if self.save:
-                self.manager.database.store_data(self.derived.id, asarray(self.derived))
+        self._update_children(metadata["parents"], self.derived.id)
+
+        if self.save:
+            self.manager.database.store_data(self.derived.id, asarray(self.derived))
 
         return self.derived
 
-    def _update_children(self, parent, child):
+    def _update_children(self, parents, child):
 
-        metadata = self.manager.database.get_metadata(parent, "children")
-        if metadata is None:
-            children = list()
-        elif "children" in metadata:
-            children = metadata["children"]
-        else:
-            children = list()
-
-        children.append(child)
-        self.manager.database.store_metadata(parent, children=children)
+        for parent in parents:
+            metadata = self.manager.database.get_metadata(parent, "children")
+            children = metadata.get("children", list())
+            children.append(child)
+            self.manager.database.store_metadata(parent, children=metadata["children"])
 
 
 class InitTransform(SoundTransform):
+
+    def store(self):
+
+        self.manager.database.store_metadata(self.derived.id, **self.metadata)
+        self.derived.transformation.update(self.metadata)
+
+        if self.save:
+            self.manager.database.store_data(self.derived.id, asarray(self.derived))
+
+        return self.derived
 
     @staticmethod
     def reconstruct(waveform, metadata, silence=False, manager=None):
@@ -69,7 +70,7 @@ class InitTransform(SoundTransform):
             return sound
 
 
-class LoadTransform(SoundTransform):
+class LoadTransform(InitTransform):
 
     @staticmethod
     def reconstruct(waveform, metadata, silence=False, manager=None):
@@ -92,7 +93,7 @@ class LoadTransform(SoundTransform):
             return sound
 
 
-class CreateTransform(SoundTransform):
+class CreateTransform(InitTransform):
 
     @staticmethod
     def reconstruct(waveform, metadata, silence=False, manager=None):
@@ -178,6 +179,7 @@ class RampTransform(SoundTransform):
         duration = metadata["duration"] * second
 
         return sound.ramp(when=when, duration=duration)
+
 
 class ResampleTransform(SoundTransform):
 
@@ -274,60 +276,60 @@ class MultiplyTransform(SoundTransform):
         return coeff * sound
 
 
-class InPlaceMultiplyTransform(SoundTransform):
-
-    def store(self):
-
-        tmp = self.derived.__class__(self.derived,
-                                     manager=self.manager)
-
-        if not self.manager.reconstruct_flag:
-            self.manager.database.store_metadata(tmp.id, **self.metadata)
-            self.derived.transformation.update(self.metadata)
-            if self.original is not None:
-                self.manager.database.store_metadata(tmp.id, parents=[self.original.id])
-                self._update_children(self.original.id, tmp.id)
-
-            if self.save:
-                self.manager.database.store_data(tmp.id, asarray(self.derived))
-
-        self.derived.id = tmp.id
-
-    @staticmethod
-    def reconstruct(waveform, metadata, manager=None):
-        from neosound.sound import Sound
-
-        manager.logger.debug("Reconstructing multiply transform")
-
-        if hasattr(waveform, "samplerate"):
-            samplerate = waveform.samplerate
-        else:
-            samplerate = metadata["samplerate"] * hertz
-
-        sound = Sound(waveform, samplerate=samplerate, manager=manager)
-        coeff = metadata["coefficient"]
-
-        return coeff * sound
-
+# class InPlaceMultiplyTransform(SoundTransform):
+#
+#     def store(self):
+#
+#         tmp = self.derived.__class__(self.derived,
+#                                      manager=self.manager)
+#
+#         if not self.manager.reconstruct_flag:
+#             self.manager.database.store_metadata(tmp.id, **self.metadata)
+#             self.derived.transformation.update(self.metadata)
+#             if self.original is not None:
+#                 self.manager.database.store_metadata(tmp.id, parents=[self.original.id])
+#                 self._update_children(self.original.id, tmp.id)
+#
+#             if self.save:
+#                 self.manager.database.store_data(tmp.id, asarray(self.derived))
+#
+#         self.derived.id = tmp.id
+#
+#     @staticmethod
+#     def reconstruct(waveform, metadata, manager=None):
+#         from neosound.sound import Sound
+#
+#         manager.logger.debug("Reconstructing multiply transform")
+#
+#         if hasattr(waveform, "samplerate"):
+#             samplerate = waveform.samplerate
+#         else:
+#             samplerate = metadata["samplerate"] * hertz
+#
+#         sound = Sound(waveform, samplerate=samplerate, manager=manager)
+#         coeff = metadata["coefficient"]
+#
+#         return coeff * sound
+#
 
 class AddTransform(SoundTransform):
 
-    def store(self):
-
-        ids = [orig.id for orig in self.original]
-        self.derived = self.original[0].__class__(self.derived,
-                                                  manager=self.original[0].manager)
-        if not self.manager.reconstruct_flag:
-            self.manager.database.store_metadata(self.derived.id, **self.metadata)
-            self.manager.database.store_metadata(self.derived.id, parents=ids)
-            self.derived.transformation.update(self.metadata)
-            for orig_id in ids:
-                self._update_children(orig_id, self.derived.id)
-
-            if self.save:
-                self.manager.database.store_data(self.derived.id, asarray(self.derived))
-
-        return self.derived
+    # def store(self):
+    #
+    #     ids = [orig.id for orig in self.original]
+    #     self.derived = self.original[0].__class__(self.derived,
+    #                                               manager=self.original[0].manager)
+    #     if not self.manager.reconstruct_flag:
+    #         self.manager.database.store_metadata(self.derived.id, **self.metadata)
+    #         self.manager.database.store_metadata(self.derived.id, parents=ids)
+    #         self.derived.transformation.update(self.metadata)
+    #         for orig_id in ids:
+    #             self._update_children(orig_id, self.derived.id)
+    #
+    #         if self.save:
+    #             self.manager.database.store_data(self.derived.id, asarray(self.derived))
+    #
+    #     return self.derived
 
     @staticmethod
     def reconstruct(waveforms, metadata, manager=None):

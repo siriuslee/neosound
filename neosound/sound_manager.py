@@ -14,33 +14,34 @@ class SoundManager(object):
     _default_database = SoundStore()
     logger = logging.Logger(os.path.join(data_dir, "sound_log"), level=30)
 
-    def __init__(self, database=None, filename=None, db_args=dict()):
-        """ Initialize a SoundManager object.
+    def __init__(self, database=None, filename=None, db_args=None, read_only=False):
+        """ Initialize a SoundManager object. If no database is provided, the default one will be chosen. If one has been recently used (ie since the class was defined), then that one will be chosen. Otherwise, no data will be stored.
 
-        :param database: A subclass of SoundStore responsible for persisting sounds toa  file.
+        :param database: A subclass of SoundStore responsible for persisting sounds to a file.
         :param filename: The name of the sound file.
         :param db_args: A dictionary of arguments that will be passed to the constructor of database.
+        :param read_only: prevents writing to the database if True
         """
+
+        if db_args is None:
+            db_args = dict()
 
         if database is None:
             self.database = self._default_database
         else:
-            # Create temporary database filename
-            # if filename is None:
             self.database = database(filename, **db_args)
             self._default_database = self.database
 
-        self.ids = self.database.list_ids()
-        self.reconstruct_flag = False
+        self.read_only = read_only
 
     def get_id(self):
 
-        self.ids = self.database.list_ids()
-        max_id = np.max(self.ids) if len(self.ids) else 0
-
-        return max_id + 1
+        return self.database.get_id()
 
     def store(self, derived, metadata, original=None, save=False):
+
+        if self.read_only:
+            return derived
 
         try:
             transform = metadata["type"](self, derived, metadata, original, save)
@@ -50,6 +51,7 @@ class SoundManager(object):
         derived = transform.store()
         return derived
 
+    # I think these recursive methods can be done better, but that's low priority
     def get_roots(self, id_):
 
         def get_parents(id_):
@@ -116,9 +118,16 @@ class SoundManager(object):
                             id=id_,
                             root_id=root_id)
 
-        self.reconstruct_flag = True
-        sound = get_waveform_ind(id_)
-        self.reconstruct_flag = False
+        # This can be done better. Probably shouldn't use a bare except
+        previous_read_only = self.read_only
+        try:
+            self.read_only = True
+            sound = get_waveform_ind(id_)
+        except:
+            raise
+        finally:
+            self.read_only = previous_read_only
+
         if store:
             sound = self.store(sound, metadata)
 
