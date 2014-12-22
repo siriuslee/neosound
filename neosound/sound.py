@@ -6,10 +6,10 @@ from functools import wraps
 
 from matplotlib import pyplot as plt
 import numpy as np
-from brian import second, hertz, Quantity, units, msecond
+from scipy.signal import firwin, filtfilt, resample
+from brian import second, hertz, Quantity, units, msecond, check_units
 from brian.hears import dB, dB_type
 from brian.hears import Sound as BHSound
-from scipy.signal import firwin, filtfilt
 
 try:
     from neo.core.baseneo import _check_annotations
@@ -28,7 +28,7 @@ def soundstore(func):
 
     @wraps(func)
     def store(obj, *args, **kwargs):
-
+        read_only = kwargs.pop("read_only", False)
         result = func(obj, *args, **kwargs)
 
         # result does not conform to the storage pattern. Just return it.
@@ -39,7 +39,7 @@ def soundstore(func):
         metadata = result[-1]
 
         # storage is writeable
-        if not (obj.manager.read_only or kwargs.get("read_only", False)):
+        if not (obj.manager.read_only or read_only):
             transformed = obj.manager.store(transformed, metadata, obj)
 
         if len(result) > 2:
@@ -52,21 +52,51 @@ def soundstore(func):
 def create_sound(func):
 
     @wraps(func)
-    def create(*args, **kwargs):
+    def create(cls, *args, **kwargs):
         manager = kwargs.pop("manager", SoundManager())
-        created = func(*args, **kwargs)
+        created = func(cls, *args, **kwargs)
+        metadata = dict(type=CreateTransform,
+                        sound=func.__name__)
+        for kw, val in kwargs.iteritems():
+            if isinstance(val, Quantity):
+                metadata["%s_units" % kw] = repr(val.dim)
+                val = float(val)
+            metadata[kw] = val
         created = Sound(created, manager=manager)
-        created.manager.store(created, dict(type=CreateTransform,
-                                            sound=func.__name__), save=True)
+        created.manager.store(created, metadata, save=True)
         return created
 
+    create.__doc__ = getattr(BHSound, func.__name__).__doc__
+
     return create
+
+def ensure_type(func):
+
+    @wraps(func)
+    def ensured(obj, *args, **kwargs):
+        result = func(obj, *args, **kwargs)
+        if isinstance(result, tuple):
+            result = list(result) # tuples are immutable. Convert to list first.
+            for ii, rr in enumerate(result):
+                if isinstance(rr, BHSound):
+                    result[ii] = Sound(rr, manager=obj.manager)
+            result = tuple(result)
+        else:
+            if isinstance(result, BHSound):
+                result = Sound(result, manager=obj.manager)
+
+        return result
+
+    return ensured
 
 
 class Sound(BHSound):
     '''
-    A representation of sounds that inherits and extends the wonderful brian.hears simulator. This is designed to integrate with the python-neo neurophysiology data framework.
+    A representation of sounds that inherits and extends the wonderful brian.hears simulator.
     '''
+
+    # Custom keyword arguments
+    _keywords = ["manager", "initialize", "save"]
 
     # Custom properties
     nchannels = property(fget=lambda self: self.shape[1] if self.ndim > 1 else 1,
@@ -82,13 +112,18 @@ class Sound(BHSound):
 
     def __new__(cls, sound, *args, **kwargs):
 
-        kwargs.pop("manager", None)
-        kwargs.pop("initialize", None)
-        kwargs.pop("save", None)
+        for kw in cls._keywords:
+            kwargs.pop(kw, None)
 
         return BHSound.__new__(cls, sound, *args, **kwargs)
 
-    def __init__(self, sound, manager=SoundManager(), save=True, initialize=False, **kwargs):
+    def __init__(self, sound, manager=None, save=True, initialize=False, *args, **kwargs):
+
+        if manager is None:
+            if hasattr(sound, "manager"):
+                manager = sound.manager
+            else:
+                manager = SoundManager()
 
         self.manager = manager
         self.id = self.manager.get_id()
@@ -100,13 +135,13 @@ class Sound(BHSound):
         self.annotations = dict()
         self.transformation = dict()
 
-        self.annotate(samplerate=self.samplerate)
+        self.annotate(samplerate=float(self.samplerate))
 
         if isinstance(sound, str):
             self.annotate(original_filename=sound)
             self.manager.store(self, dict(type=LoadTransform,
                                           filename=sound,
-                                          samplerate=self.samplerate), save=save)
+                                          samplerate=float(self.samplerate)), save=save)
         if initialize:
             self.manager.store(self, dict(type=InitTransform), save=save)
 
@@ -123,32 +158,6 @@ class Sound(BHSound):
             tmp.manager = self.manager
         if not hasattr(tmp, "id") and hasattr(self, "id"):
             tmp.id = self.id
-        # if context is not None:
-        #     context_type = context[0].__name__
-        #     context_values = context[1]
-        #     in_place = len(context_values) == 3
-        #     # in_place = False
-        #     # Most likely ufunc values are "divide", "multiply", "add", and "subtract"
-        #     used_types = ["divide", "multiply"]
-        #     if context_type in used_types:
-        #         scalar = [val for val in context_values if isinstance(val, (int, float, Quantity))]
-        #
-        #         # If this is a multiplication, a scalar would be changing the level
-        #         # Whereas a nonscalar would be something like an envelope
-        #         # Both should be permissible
-        #         if len(scalar):
-        #             scalar = scalar[0]
-        #             metadatas = dict(divide=dict(type=MultiplyTransform,
-        #                                          coefficient=1 / scalar,
-        #                                          ),
-        #                              multiply=dict(type=MultiplyTransform,
-        #                                            coefficient=scalar,
-        #                                            ))
-        #             metadata = metadatas[context_type]
-        #             if in_place:
-        #                 metadata["type"] = InPlaceMultiplyTransform
-        #
-        #             tmp = self.manager.store(tmp, metadata, self)
 
         return tmp
 
@@ -158,94 +167,12 @@ class Sound(BHSound):
         self.manager = getattr(obj, "manager", SoundManager())
         self.id = getattr(obj, "id", self.manager.get_id())
 
-    def __getitem__(self, key):
-
-        key = self._rekey(key)
-        sliced = super(Sound, self).__getitem__(key)
-        if isinstance(key, (int, float, Quantity)):
-            return sliced
-        else:
-            start, stop = self._keydata(key)
-            metadata = dict(type=SliceTransform,
-                            start_time=float(start),
-                            end_time=float(stop),
-                            )
-            return self.manager.store(sliced, metadata, self)
-
-    def __setitem__(self, key, value):
-
-        key = self._rekey(key)
-        start, stop = self._keydata(key)
-        metadata = dict(type=SetTransform,
-                        start_time=float(start),
-                        end_time=float(stop))
-        super(Sound, self).__setitem__(key, value)
-        return self.manager.store(self, metadata, value)
-
-    def _rekey(self, key):
-        if not isinstance(key, (tuple, slice)):
-            if isinstance(key, Quantity):
-                key *= self.samplerate
-                key = int(np.rint(key))
-            return key
-
-        channel = slice(None)
-        if isinstance(key, tuple):
-            channel = key[1]
-            key = key[0]
-
-        newkey = [int(np.rint(v * self.samplerate)) if (v is not None) and (units.have_same_dimensions(v, second)) \
-                  else v for v in [key.start, key.stop, key.step]]
-
-        return slice(*newkey), channel
-
-    def _keydata(self, key):
-
-        if isinstance(key, (int, float)):
-            start = key / self.samplerate
-            stop = None
-        elif isinstance(key, Quantity):
-            start = key
-            stop = None
-        elif isinstance(key, (slice, tuple)):
-            if isinstance(key, tuple):
-                key = key[0]
-
-            if key.start is None:
-                start = 0 * second
-            elif units.have_same_dimensions(key.start, second):
-                start = key.start
-            else:
-                start = key.start / self.samplerate
-
-            if key.stop is None:
-                stop = self.duration
-            elif units.have_same_dimensions(key.stop, second):
-                stop = key.stop
-            else:
-                stop = key.stop / self.samplerate
-        else:
-            raise TypeError("__getitem__ key is of an unexpected type: %s." % str(type(key)))
-
-        return start, stop
-
-    @soundstore
     def __add__(self, other):
-        '''
-        Adds together self and other. First it ensures that they have the same duration, which seems like a more
-        reasonable default than the brian.hears method of repeating the shorter sound.
-        :param other: Another Sound object
-        :return: A CombinedSound object that keeps intact the individual sounds in combined.components
-        '''
 
         if self.duration != other.duration:
             print("Duration of the summed sounds must be identical")
             return
-        summed = super(Sound, self).__add__(other)
-
-        metadata = dict(type=AddTransform,
-                        parents=[self.id, other.id])
-        return summed, metadata
+        return super(Sound, self).__add__(other)
 
     def __sub__(self, other):
 
@@ -254,49 +181,42 @@ class Sound(BHSound):
     __iadd__ = __add__
     __isub__ = __sub__
 
-    @soundstore
-    def set_level(self, level):
-        '''
-        Sets level in dB SPL (RMS) assuming array is in Pascals. ``level``
-        should be a value in dB, or a tuple of levels, one for each channel.
-        '''
+    def _round_time(self, time):
 
-        rms_dB = self.get_level()
-        if self.nchannels>1:
-            level = np.array(level)
-            if level.size==1:
-                level = level.repeat(self.nchannels)
-            level = np.reshape(level, (1, self.nchannels))
-            rms_dB = np.reshape(rms_dB, (1, self.nchannels))
-        else:
-            if not isinstance(level, dB_type):
-                raise dB_error('Must specify level in dB')
-            rms_dB = float(rms_dB)
-            level = float(level)
-        gain = 10**((level-rms_dB)/20.)
-
-        metadata = dict(type=MultiplyTransform,
-                        scalar=gain)
-
-        return self * gain, metadata
+        return int(time * self.samplerate) * self.sampleperiod
 
     @soundstore
-    def to_mono(self):
-        '''
-        Converts the Sound object from stereo to mono.
-        :return: Mono Sound object
-        '''
-        if self.ndim > 1:
-            data = Sound(self.mean(axis=1).reshape((-1, 1)),
-                         samplerate=self.samplerate,
-                         manager=self.manager)
+    @ensure_type
+    def clip(self, max_val, min_val=None):
+        # min_val should default to None and then be given the value of negative max_val
 
-            metadata = dict(type=MonoTransform)
-            return data, metadata
+        if min_val is None:
+            min_val = -max_val
+        clipped = super(Sound, self).clip(min_val, max_val)
 
-        return self
+        metadata = dict(type=ClipTransform,
+                        min_value=min_val,
+                        max_value=max_val)
+        return clipped, metadata
 
     @soundstore
+    @ensure_type
+    def combine(self, other):
+        '''
+        Adds together self and other. First it ensures that they have the same duration, which seems like a more
+        reasonable default than the brian.hears method of repeating the shorter sound.
+        :param other: Another Sound object
+        :return The summed Sound object
+        '''
+        summed = self + other
+
+        if summed is not None:
+            metadata = dict(type=AddTransform,
+                            parents=[self.id, other.id])
+            return summed, metadata
+
+    @soundstore
+    @ensure_type
     def filter(self, frequency_range=None, filter_order=None):
         '''
         Filters the sound within a particular frequency range. Depending on the values supplied, a lowpass, highpass,
@@ -317,8 +237,6 @@ class Sound(BHSound):
 
         if filter_order * 3 >= self.nsamples:
             raise ValueError("filter_order cannot be greater than nsamples / 3: 3 * %d > %d" % (filter_order, self.nsamples))
-
-
 
         if frequency_range[0] == 0:
             if frequency_range[1] < self.nyquist_frequency:
@@ -344,11 +262,40 @@ class Sound(BHSound):
                         order=filter_order)
         return data, metadata
 
-    def envelope(self, min_power=0*dB):
+    @soundstore
+    @ensure_type
+    def pad(self, duration, start=None, max_start=None, min_start=0*second):
+        '''
+        Pads the sound with silence. All units are in seconds.
+        :param duration: Total duration of the resulting sound.
+        :param start: Prespecified start time for the Sound object in the silence.
+        :param min_start, max_start: Start time will be chosen from a uniform distribution between these two values
+        if start is not a provided argument.
+        :return A Sound object with silence applied.
+        '''
 
-        env = np.abs(np.asarray(self))
+        if duration < self.duration:
+            return self
+
+        if start is None:
+            if max_start is None:
+                max_start = duration - self.duration
+            start = random.uniform(min_start, min(max_start, duration - self.duration))
+
+        # Round times to nearest sample
+        duration = self._round_time(duration)
+        start = self._round_time(start)
+
+        stop = start + self.duration
+        padded = self.extended(duration - stop)
+
+        metadata = dict(type=PadTransform,
+                        start_time=start,
+                        duration=duration)
+        return padded.shifted(start), metadata
 
     @soundstore
+    @ensure_type
     def ramp(self, when="both", duration=10*msecond, envelope=None):
         '''
         Adds a ramp on/off to the sound
@@ -371,10 +318,25 @@ class Sound(BHSound):
 
         metadata = dict(type=RampTransform,
                         when=when,
-                        duration=duration)
+                        duration=float(duration))
         return ramped, metadata
 
     @soundstore
+    @ensure_type
+    def replace(self, start, stop, other):
+
+        new = Sound(self)
+        new[start: stop] = other
+
+        metadata = dict(type=SetTransform,
+                        start_time=float(start),
+                        stop_time=float(stop),
+                        parents=[self.id, other.id])
+
+        return new, metadata
+
+    @soundstore
+    @ensure_type
     def resample(self, samplerate, resample_type="sinc_best"):
         '''
         Returns a resampled version of the sound.
@@ -386,63 +348,85 @@ class Sound(BHSound):
         resampled = super(Sound, self).resample(samplerate, resample_type=resample_type)
 
         metadata = dict(type=ResampleTransform,
-                        new_samplerate=samplerate,
+                        new_samplerate=float(samplerate),
                         resample_type=resample_type)
+
         return resampled, metadata
 
-    def to_silence(self):
+    @soundstore
+    @ensure_type
+    def set_level(self, level):
+        '''
+        Sets level in dB SPL (RMS) assuming array is in Pascals. ``level``
+        should be a value in dB, or a tuple of levels, one for each channel.
+        '''
 
-        return Sound.silence(duration=self.duration, nchannels=self.nchannels, samplerate=self.samplerate)
+        rms_dB = self.get_level()
+        if self.nchannels>1:
+            level = np.array(level)
+            if level.size==1:
+                level = level.repeat(self.nchannels)
+            level = np.reshape(level, (1, self.nchannels))
+            rms_dB = np.reshape(rms_dB, (1, self.nchannels))
+        else:
+            if not isinstance(level, dB_type):
+                raise dB_error('Must specify level in dB')
+            rms_dB = float(rms_dB)
+            level = float(level)
+        gain = 10**((level-rms_dB)/20.)
 
-    def to_spectrum_matched_noise(self, duration=None):
+        metadata = dict(type=MultiplyTransform,
+                        level=level)
 
-        if duration is None:
-            duration = self.duration
-
-        next2 = lambda x: 2 ** (np.ceil(np.log2(x)))
-        pad_duration = next2(int(duration * self.samplerate)) * self.sampleperiod
-        spectrum = np.fft.fft(self.pad(pad_duration, start=0*second), axis=0)
-
-        return Sound.spectrum_matched_noise(spectrum, samplerate=self.samplerate, manager=self.manager)[:duration].set_level(self.level)
-
-    def _round_time(self, time):
-
-        return int(time * self.samplerate) * self.sampleperiod
+        return self * gain, metadata
 
     @soundstore
-    def pad(self, duration, start=None, max_start=None, min_start=0*second):
+    @ensure_type
+    def slice(self, start, stop=None):
+        if stop is None:
+            stop = self.duration
+
+        sliced = self[start: stop]
+
+        metadata = dict(type=SliceTransform,
+                        start_time=float(start),
+                        stop_time=float(stop))
+        return sliced, metadata
+
+    @soundstore
+    @ensure_type
+    def to_mono(self):
         '''
-        Pads the sound with silence. All units are in seconds.
-        :param duration: Total duration of the resulting sound.
-        :param start: Prespecified start time for the Sound object in the silence.
-        :param min_start, max_start: Start time will be chosen from a uniform distribution between these two values
-        if start is not a provided argument.
-        :return: A Sound object with silence applied.
+        Converts the Sound object from stereo to mono.
+        :return: Mono Sound object
         '''
 
+        if self.ndim == 1:
+            return self
 
-        if start is None:
-            if max_start is None:
-                max_start = duration - self.duration
-            start = random.uniform(min_start, min(max_start, duration - self.duration))
+        data = Sound(self.mean(axis=1).reshape((-1, 1)),
+                     samplerate=self.samplerate,
+                     manager=self.manager)
 
-        # Round times to nearest sample
-        duration = self._round_time(duration)
-        start = self._round_time(start)
+        metadata = dict(type=MonoTransform)
+        return data, metadata
 
-        stop = start + self.duration
-        padded = self.extended(duration - stop)
+    def component(self, n):
 
-        metadata = dict(type=PadTransform,
-                        start_time=start,
-                        duration=duration)
-        return padded.shifted(start), metadata
+        component_id = self.roots[n]
 
-    def unpad(self, threshold=0):
+        return self.manager.reconstruct_individual(self.id, component_id)
 
-        inds = np.where(np.asarray(self) > threshold)[0]
+    @property
+    def components(self):
 
-        return self[inds[0]: inds[-1]]
+        components = list()
+        for root_id in self.roots:
+            component_id = self.manager.database.filter_ids(transform_id=self.id,
+                                                           transform_root_id=root_id)
+            components.extend(component_id)
+
+        return components
 
     def embed(self, other, start=None, max_start=None, min_start=0*second, ratio=None):
         '''
@@ -468,7 +452,40 @@ class Sound(BHSound):
         padded = self.pad(duration, start=start)
         other = other.pad(duration, start=0*second)
 
-        return padded + other
+        return padded.combine(other)
+
+    def envelope(self, min_power=0*dB):
+
+        env = np.abs(np.asarray(self))
+
+    def get_power_nonsilence(self, silence_threshold=.1):
+
+        waveform = np.abs(np.asarray(self))
+        range = waveform.max() * silence_threshold
+        power = list()
+        for ii in xrange(self.nchannels):
+            arr = waveform[:, ii].squeeze()
+            d = np.diff(arr)
+            inds = np.where(np.all(np.vstack([arr[1:-1] > range,
+                                              d[:-1] > 0,
+                                              d[1:] < 0]),
+                                   axis=0))[0]
+            power.append((arr[1:-1][inds] ** 2).mean())
+
+        return power
+
+    def plot(self):
+
+        plt.plot(self.times, self)
+        plt.xlim((0 * second, self.duration))
+        plt.xlabel("Time (s)")
+
+    def store(self):
+
+        self.manager.database.store_data(self.id, np.asarray(self))
+        self.manager.database.store_annotations(self.id, **self.annotations)
+
+     #def sequence(sounds, duration=10*second, ISIs=None):
 
     def trim(self, duration, trim_from="end", max_start=None, min_start=0*second):
         '''
@@ -498,36 +515,17 @@ class Sound(BHSound):
             start = min(start, self.duration - duration)
             stop = start + duration
 
-        return self[start: stop]
+        return self.slice(start, stop)
 
-    @soundstore
-    def clip(self, max_val, min_val=None):
-        # min_val should default to None and then be given the value of negative max_val
+    def unpad(self, threshold=0):
 
-        if min_val is None:
-            min_val = -max_val
-        clipped = super(Sound, self).clip(min_val, max_val)
+        inds = np.where(np.asarray(self) > threshold)[0]
+        start = self._round_time(inds[0])
+        stop = self._round_time(inds[1])
 
-        metadata = dict(type=ClipTransform,
-                        min_value=min_val,
-                        max_value=max_val)
-        return clipped, metadata
+        return self.slice(start, stop)
 
-    def get_power_nonsilence(self, silence_threshold=.1):
 
-        waveform = np.abs(np.asarray(self))
-        range = waveform.max() * silence_threshold
-        power = list()
-        for ii in xrange(self.nchannels):
-            arr = waveform[:, ii].squeeze()
-            d = np.diff(arr)
-            inds = np.where(np.all(np.vstack([arr[1:-1] > range,
-                                              d[:-1] > 0,
-                                              d[1:] < 0]),
-                                   axis=0))[0]
-            power.append((arr[1:-1][inds] ** 2).mean())
-
-        return power
 
     @staticmethod
     def query(sounds, query_function):
@@ -543,39 +541,9 @@ class Sound(BHSound):
 
         return sounds
 
-    def component(self, n):
-
-        component_id = self.roots[n]
-
-        return self.manager.reconstruct_individual(self.id, component_id)
-
-    @property
-    def components(self):
-
-        components = list()
-        for root_id in self.roots:
-            component_id = self.manager.database.filter_ids(transform_id=self.id,
-                                                           transform_root_id=root_id)
-            components.extend(component_id)
-
-        return components
-
-    def plot(self):
-
-        plt.plot(self.times, self)
-        plt.xlim((0 * second, self.duration))
-        plt.xlabel("Time (s)")
-
-    def store(self):
-
-        self.manager.database.store_data(self.id, np.asarray(self))
-        self.manager.database.store_annotations(self.id, **self.annotations)
-
-     #def sequence(sounds, duration=10*second, ISIs=None):
-
     # Wrappers for particular sound types
     @staticmethod
-    def spectrum_matched_noise(spectrum, samplerate=44100*hertz, manager=SoundManager()):
+    def spectrum_matched_noise(spectrum, samplerate=44100*hertz, manager=SoundManager(), save=True):
 
         if len(spectrum.shape) == 1:
             spectrum = np.reshape(spectrum, -1, 1)
@@ -592,9 +560,20 @@ class Sound(BHSound):
             phase[n2 + 1:, :] = np.flipud(np.conj(phase[1: n2, :]))
 
         z = mag * phase
-        noise = Sound(np.fft.ifft(z, axis=0).real, samplerate=samplerate, manager=manager)
+        noise = Sound(np.fft.ifft(z, axis=0).real, samplerate=samplerate, manager=manager, initialize=True, save=save)
 
         return noise
+
+    def to_spectrum_matched_noise(self, duration=None):
+
+        if duration is None:
+            duration = self.duration
+
+        next2 = lambda x: 2 ** (np.ceil(np.log2(x)))
+        pad_duration = next2(int(duration * self.samplerate)) * self.sampleperiod
+        spectrum = np.fft.fft(self.pad(pad_duration, start=0*second), axis=0)
+
+        return Sound.spectrum_matched_noise(spectrum, samplerate=self.samplerate, manager=self.manager)[:duration].set_level(self.level)
 
     @classmethod
     @create_sound
@@ -638,6 +617,10 @@ class Sound(BHSound):
 
         return super(Sound, cls).silence(*args, **kwargs)
 
+    def to_silence(self):
+
+        return Sound.silence(duration=self.duration, nchannels=self.nchannels, samplerate=self.samplerate)
+
     @classmethod
     @create_sound
     def clicks(cls, *args, **kwargs):
@@ -669,15 +652,15 @@ class Sound(BHSound):
         return super(Sound, cls).irns(*args, **kwargs)
 
 
-if False:
-    sm = SoundManager(HDF5Store, "/tmp/test.h5")
+if True:
+    sm = SoundManager()
     shaping = "/auto/k8/tlee/songs/shaping_songs/Track1long.wav"
     s = Sound(shaping, manager=sm)
     w = Sound.whitenoise(duration=s.duration, nchannels=s.nchannels, samplerate=s.samplerate, manager=sm)
     t = Sound.tone(frequency=1000*hertz, duration=s.duration, nchannels=s.nchannels, samplerate=s.samplerate,
                    manager=sm)
-    x = w[1*second:3*second]
-    s[:x.duration] = x
-    y = s + t
+    x = w.slice(1*second, 3*second)
+    sx = s.replace(0*second, x.duration,  x)
+    y = sx.combine(t)
     z = y.pad(10*second)
-    c = z.component(0)
+    #c = z.component(0)

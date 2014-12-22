@@ -16,11 +16,38 @@ class SoundStore(object):
 
         return str(uuid.uuid4())
 
+    def get_annotations(self, id_):
+
+        annotations = dict((key, value) for key, value in self.data[id_].iteritems() if not value.startswith("transform_"))
+        return annotations
+
+    def get_metadata(self, id_, *args):
+
+        try:
+            if len(args):
+                metadata = dict([(ss, self.data[id_]["transform_" + ss]) for ss in args])
+            else:
+                metadata = dict([(key.split("transform_")[1], val) for key, val in self.data[id_].iteritems() if
+                                 key.startswith("transform_")])
+            if "type" in metadata:
+                metadata["type"] = getattr(sound_transforms, metadata["type"])
+
+            return metadata
+        except KeyError:
+            return dict()
+
+    def get_data(self, id_):
+
+        try:
+            return self.data[id_]["waveform"]
+        except KeyError:
+            return None
+
     def store_annotations(self, id_, **kwargs):
 
         self.data.setdefault(id_, dict()).update(kwargs)
 
-    def get_annotations(self, id_):
+
 
         try:
             annotations = dict([(key, val) for key, val in self.data[id_].iteritems() if not key.startswith(
@@ -40,31 +67,56 @@ class SoundStore(object):
 
         self.data.setdefault(id_, dict())["waveform"] = data
 
-    def get_metadata(self, id_, *args):
+    def filter_ids(self, num_matches=None, **kwargs):
 
-        try:
-            if len(args):
-                metadata = dict([(ss, self.data[id_]["transform_" + ss]) for ss in args])
-            else:
-                metadata = dict([(key.split("transform_")[1], val) for key, val in self.data[id_].iteritems() if
-                                 key.startswith("transform_")])
-            if "type" in metadata:
-                metadata["type"] = getattr(sound_transforms, metadata["type"])
+        result_ids = list()
+        for name, annotations in self.data.iteritems():
+            match = True
+            for key, value in kwargs.iteritems():
+                if key in annotations:
+                    if annotations[key] != value:
+                        match = False
+                        break
+                else:
+                    match = False
+                    break
+            if match:
+                result_ids.append(name)
 
-            return metadata
-        except KeyError:
-            return None
+            if (num_matches is not None) and (len(result_ids) == num_matches):
+                break
 
-    def get_data(self, id_):
+        return result_ids
 
-        try:
-            return self.data[id_]["waveform"]
-        except KeyError:
-            return None
+    def filter_by_func(self, num_matches=None, **kwarg_funcs):
+
+        result_ids = list()
+        for name, annotations in self.data.iteritems():
+            match = True
+            for key, func in kwarg_funcs.iteritems():
+                if key in annotations:
+                    if not func(annotations[key]):
+                        match = False
+                        break
+                else:
+                    match = False
+                    break
+            if match:
+                result_ids.append(name)
+
+            if (num_matches is not None) and (len(result_ids) == num_matches):
+                break
+
+        return result_ids
 
     def list_ids(self):
 
         return self.data.keys()
+
+    def list_roots(self):
+
+        return self.filter_by_func(transform_parents=lambda x: len(x) == 0)
+
 
 
 class HDF5Store(object):
@@ -80,10 +132,6 @@ class HDF5Store(object):
             with h5py.File(self.filename, "a") as f:
                 pass
 
-    def get_id(self):
-
-        return str(uuid.uuid4())
-    
     def _get_group(self, f, group_name):
 
         # if group_name in self._ids:
@@ -93,17 +141,10 @@ class HDF5Store(object):
             g = f.create_group(group_name)
         return g
 
-    def store_annotations(self, id_, **kwargs):
-        if self.read_only:
-            return
+    def get_id(self):
 
-        id_ = unicode(id_)
-
-        with h5py.File(self.filename, "a") as f:
-            g = self._get_group(f, id_)
-            for key, value in kwargs.iteritems():
-                g.attrs[key] = value
-
+        return str(uuid.uuid4())
+    
     def get_annotations(self, id_):
         id_ = unicode(id_)
 
@@ -113,38 +154,6 @@ class HDF5Store(object):
                 return annotations
             except KeyError:
                 return dict()
-
-    def store_metadata(self, id_, **kwargs):
-        if self.read_only:
-            return
-
-        id_ = unicode(id_)
-
-        if "type" in kwargs:
-            kwargs["type"] = kwargs["type"].__name__
-
-        with h5py.File(self.filename, "a") as f:
-            g = self._get_group(f, id_)
-            for key, value in kwargs.iteritems():
-                key = "transform_" + key
-                if value is None:
-                    value = 'None'
-                g.attrs[key] = value
-
-    def store_data(self, id_, data, overwrite=True):
-        if self.read_only:
-            return
-
-        id_ = unicode(id_)
-
-        with h5py.File(self.filename, "a") as f:
-            g = self._get_group(f, id_)
-
-            if "waveform" not in g:
-                g.create_dataset("waveform", data=data)
-            else:
-                if overwrite:
-                    g["waveform"][:] = data
 
     def get_metadata(self, id_, *args):
         id_ = unicode(id_)
@@ -178,6 +187,49 @@ class HDF5Store(object):
             except KeyError:
                 return None
 
+    def store_annotations(self, id_, **kwargs):
+        if self.read_only:
+            return
+
+        id_ = unicode(id_)
+
+        with h5py.File(self.filename, "a") as f:
+            g = self._get_group(f, id_)
+            for key, value in kwargs.iteritems():
+                g.attrs[key] = value
+
+    def store_metadata(self, id_, **kwargs):
+        if self.read_only:
+            return
+
+        id_ = unicode(id_)
+
+        if "type" in kwargs:
+            kwargs["type"] = kwargs["type"].__name__
+
+        with h5py.File(self.filename, "a") as f:
+            g = self._get_group(f, id_)
+            for key, value in kwargs.iteritems():
+                key = "transform_" + key
+                if value is None:
+                    value = 'None'
+                g.attrs[key] = value
+
+    def store_data(self, id_, data, overwrite=True):
+        if self.read_only:
+            return
+
+        id_ = unicode(id_)
+
+        with h5py.File(self.filename, "a") as f:
+            g = self._get_group(f, id_)
+
+            if "waveform" not in g:
+                g.create_dataset("waveform", data=data)
+            else:
+                if overwrite:
+                    g["waveform"][:] = data
+
     def filter_ids(self, num_matches=None, **kwargs):
 
         result_ids = list()
@@ -193,7 +245,7 @@ class HDF5Store(object):
                         match = False
                         break
                 if match:
-                    result_ids.append(int(name))
+                    result_ids.append(name)
 
                 if (num_matches is not None) and (len(result_ids) == num_matches):
                     break
@@ -215,14 +267,14 @@ class HDF5Store(object):
                         match = False
                         break
                 if match:
-                    result_ids.append(int(name))
+                    result_ids.append(name)
 
         return result_ids
 
     def list_ids(self):
 
         with h5py.File(self.filename, "r") as f:
-            return [int(kk) for kk in f.keys()]
+            return f.keys()
 
     def list_annotation_values(self, key):
 
@@ -236,9 +288,6 @@ class HDF5Store(object):
 
         return values
 
-    def list_roots(self):
-
-        return self.filter_by_func(transform_parents=lambda x: len(x) == 0)
 
 class PandasStore(HDF5Store):
     '''Stores data in an hdf5 file.

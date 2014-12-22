@@ -40,7 +40,10 @@ class SoundManager(object):
 
     def store(self, derived, metadata, original=None, save=False):
 
+        # Might need to fix this by instantiating a new sound object. Otherwise derived might be different depending on the value of read_only
         if self.read_only:
+            if original is not None:
+                derived = original.__class__(derived, manager=self)
             return derived
 
         try:
@@ -50,6 +53,14 @@ class SoundManager(object):
 
         derived = transform.store()
         return derived
+
+    def annotate(self, id_, **annotations):
+
+        if self.read_only:
+            return False
+
+        self.database.store_annotations(id_, **annotations)
+        return True
 
     # I think these recursive methods can be done better, but that's low priority
     def get_roots(self, id_):
@@ -70,23 +81,23 @@ class SoundManager(object):
         from neosound.sound import Sound
 
         def get_waveform_ind(id_):
-            self.logger.debug("Attempting to get waveform for id %d" % id_)
+            self.logger.debug("Attempting to get waveform for id %s" % id_)
             metadata = self.database.get_metadata(id_)
             if len(metadata) == 0:
-                raise KeyError("%d not in database!" % id_)
+                raise KeyError("%s not in database!" % id_)
             transform = metadata["type"].reconstruct
 
             try:
                 self.logger.debug("Attempting to get waveform from parents instead")
                 pids = metadata["parents"]
                 if len(pids):
-                    self.logger.debug("Attempting to reconstruct from %d parents" % len(pids))
+                    self.logger.debug("Attempting to reconstruct from %s parents" % len(pids))
                     return transform([get_waveform_ind(pid) for pid in pids], metadata, manager=self)
                 else:
                     raise KeyError
             except KeyError:
                 # ipdb.set_trace()
-                self.logger.debug("parents not found in database for id %d. Attempting to reconstruct!" % id_)
+                self.logger.debug("parents not found in database for id %s. Attempting to reconstruct!" % id_)
                 # If this root id is not in root_ids, we want to replace the waveform with silence
                 silence = id_ != root_id
                 waveform = self.database.get_data(id_)
@@ -94,7 +105,7 @@ class SoundManager(object):
 
         roots = self.get_roots(id_)
         if root_id not in roots:
-            self.logger.debug("Requested root_id not roots for id %d" % id_)
+            self.logger.debug("Requested root_id not roots for id %s" % id_)
             return None
 
         component_id = self.database.filter_ids(transform_id=id_,
@@ -128,7 +139,7 @@ class SoundManager(object):
         finally:
             self.read_only = previous_read_only
 
-        if store:
+        if (not self.read_only) and store:
             sound = self.store(sound, metadata)
 
         return sound
@@ -140,10 +151,10 @@ class SoundManager(object):
 
         def get_waveform(id_):
 
-            self.logger.debug("Attempting to get waveform for id %d" % id_)
+            self.logger.debug("Attempting to get waveform for id %s" % id_)
             metadata = self.database.get_metadata(id_)
             if len(metadata) == 0:
-                raise KeyError("%d not in database!" % id_)
+                raise KeyError("%s not in database!" % id_)
             transform = metadata["type"].reconstruct
             data = self.database.get_data(id_)
             if data is not None:
@@ -155,12 +166,12 @@ class SoundManager(object):
                     self.logger.debug("Attempting to get waveform from parents instead")
                     pids = metadata["parents"]
                     if len(pids):
-                        self.logger.debug("Attempting to reconstruct from %d parents" % len(pids))
+                        self.logger.debug("Attempting to reconstruct from %s parents" % len(pids))
                         return transform([get_waveform(pid) for pid in pids], metadata, manager=self)
                     else:
                         raise KeyError
                 except KeyError:
-                    self.logger.debug("parents not found in database for id %d. Attempting to reconstruct!" % id_)
+                    self.logger.debug("parents not found in database for id %s. Attempting to reconstruct!" % id_)
                     waveform = self.database.get_data(id_)
                     return transform(waveform, metadata, manager=self)
 
