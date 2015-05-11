@@ -652,7 +652,7 @@ class Sound(BHSound):
         return super(Sound, cls).irns(*args, **kwargs)
 
 
-if True:
+if False:
     sm = SoundManager()
     shaping = "/auto/k8/tlee/songs/shaping_songs/Track1long.wav"
     s = Sound(shaping, manager=sm)

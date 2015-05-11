@@ -1,7 +1,7 @@
 from __future__ import print_function
 import os
 import copy
-from unittest import TestCase
+from unittest import TestCase, main
 
 import numpy as np
 
@@ -151,7 +151,7 @@ class SoundTransformTest(TestCase):
         print("Checking slice transform...", end="")
         sound = Sound.whitenoise(duration=3*second)
         try:
-            sliced = sound[1*second: 3*second]
+            sliced = sound.slice(1*second, 3*second)
             assert sliced.nsamples == int(2*second * sound.samplerate)
             assert sliced[0] == sound[1*second]
             assert sliced[-1] == sound[-1]
@@ -168,8 +168,8 @@ class SoundTransformTest(TestCase):
         print("Checking multiply transform...", end="")
         sound = Sound.whitenoise(duration=3*second)
         try:
-            new_sound = 2 * sound
-            assert np.all(np.asarray(sound) * 2 == np.asarray(new_sound))
+            new_sound = sound.set_level(70 * dB)
+            assert np.all(np.isclose(new_sound.level, 70))
         except AssertionError:
             print("Failed")
             return
@@ -202,7 +202,7 @@ class SoundTransformTest(TestCase):
         sm = sound1.manager
         sound2 = Sound.whitenoise(duration=3*second, manager=sm)
         try:
-            combined_sound = sound1 + sound2
+            combined_sound = sound1.combine(sound2)
             assert np.all(np.asarray(combined_sound) == (np.asarray(sound1) + np.asarray(sound2)))
         except AssertionError:
             print("Failed")
@@ -219,8 +219,7 @@ class SoundTransformTest(TestCase):
         sm = sound1.manager
         sound2 = Sound.whitenoise(duration=1*second)
         try:
-            new_sound = sound1
-            new_sound[:1*second] = sound2
+            new_sound = sound1.replace(0*second, 1*second, sound2)
             assert np.all(np.asarray(new_sound[:1*second]) == np.asarray(sound2))
             assert np.all(np.asarray(new_sound[1*second:]) == np.asarray(sound1[1*second:]))
         except AssertionError:
@@ -230,3 +229,8 @@ class SoundTransformTest(TestCase):
             print("Passed")
 
         self.check_transform("set", new_sound)
+
+
+if __name__ == "__main__":
+
+    main()
