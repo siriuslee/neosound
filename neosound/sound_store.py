@@ -121,7 +121,6 @@ class SoundStore(object):
 
 class HDF5Store(object):
     '''Stores data in an hdf5 file.
-    TODO: We probably want all calls to write data to use a "with statement"
     '''
 
     def __init__(self, filename, *args, **kwargs):
@@ -144,7 +143,7 @@ class HDF5Store(object):
     def get_id(self):
 
         return str(uuid.uuid4())
-    
+
     def get_annotations(self, id_):
         id_ = unicode(id_)
 
