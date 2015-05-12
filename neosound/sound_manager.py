@@ -15,7 +15,10 @@ class SoundManager(object):
     logger = logging.Logger(os.path.join(data_dir, "sound_log"), level=30)
 
     def __init__(self, database=None, filename=None, db_args=None, read_only=False):
-        """ Initialize a SoundManager object. If no database is provided, the default one will be chosen. If one has been recently used (ie since the class was defined), then that one will be chosen. Otherwise, no data will be stored.
+        """
+        Initialize a SoundManager object. If no database is provided, the default one will be chosen. If one has
+        been recently used (i.e. since the class was defined), then that one will be chosen. Otherwise, no data will
+        be stored.
 
         :param database: A subclass of SoundStore responsible for persisting sounds to a file.
         :param filename: The name of the sound file.

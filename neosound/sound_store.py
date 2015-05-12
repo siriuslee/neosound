@@ -431,29 +431,3 @@ class PandasStore(HDF5Store):
 
         return self.filter_by_func(transform_parents=lambda x: len(x) == 0)
 
-
-class MatlabStore(SoundStore):
-
-    def __init__(self, filename, *args, **kwargs):
-
-        super(MatlabStore, self).__init__(filename, *args, **kwargs)
-
-    def store_metadata(self, **kwargs):
-
-        pass
-
-    def store_data(self, **kwargs):
-
-        pass
-
-    def get_metadata(self, **kwargs):
-
-        pass
-
-    def get_data(self, **kwargs):
-
-        pass
-
-    def list_ids(self):
-
-        pass

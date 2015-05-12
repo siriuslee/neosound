@@ -249,7 +249,7 @@ class ClipTransform(SoundTransform):
 
         sound = Sound(waveforms[0], samplerate=samplerate, manager=manager)
 
-        return sound.clip(metadata["min_value"], metadata["max_value"],
+        return sound.clip(metadata["max_value"], metadata["min_value"],
                           read_only=True)
 
 

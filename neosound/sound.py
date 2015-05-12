@@ -21,9 +21,9 @@ from neosound.sound_manager import *
 def soundstore(func):
     '''
     Every function that should store transform parameters will output a tuple of the format
-    (transformed object, other outputs, transform metadata)
-    :param func:
-    :return:
+    (transformed object, other outputs, transform metadata). The transformed object and other outputs will be
+    returned and the metadata will be stored. Adding a read_only=True keyword to the function call will prevent the
+    metadata from being stored.
     '''
 
     @wraps(func)
@@ -50,6 +50,9 @@ def soundstore(func):
     return store
 
 def create_sound(func):
+    """
+    Wraps all sound creation methods so that they inherit the documentation from upstream BHSound methods
+    """
 
     @wraps(func)
     def create(cls, *args, **kwargs):
@@ -71,6 +74,9 @@ def create_sound(func):
     return create
 
 def ensure_type(func):
+    """
+    Ensures that all BHSound objects are converted to Sound objects
+    """
 
     @wraps(func)
     def ensured(obj, *args, **kwargs):
@@ -91,12 +97,9 @@ def ensure_type(func):
 
 
 class Sound(BHSound):
-    '''
+    """
     A representation of sounds that inherits and extends the wonderful brian.hears simulator.
-    '''
-
-    # Custom keyword arguments
-    _keywords = ["manager", "initialize", "save"]
+    """
 
     # Custom properties
     nchannels = property(fget=lambda self: self.shape[1] if self.ndim > 1 else 1,
@@ -112,36 +115,39 @@ class Sound(BHSound):
 
     def __new__(cls, sound, *args, **kwargs):
 
-        for kw in cls._keywords:
+        for kw in ["manager", "initialize", "save"]:
             kwargs.pop(kw, None)
 
         return BHSound.__new__(cls, sound, *args, **kwargs)
 
-    def __init__(self, sound, manager=None, save=True, initialize=False, *args, **kwargs):
+    def __init__(self, sound, samplerate=None, manager=None, save=True, initialize=False, **kwargs):
 
         if manager is None:
             if hasattr(sound, "manager"):
-                manager = sound.manager
+                self.manager = sound.manager
             else:
-                manager = SoundManager()
+                self.manager = SoundManager()
+        else:
+            self.manager = manager
 
-        self.manager = manager
         self.id = self.manager.get_id()
 
         if hasattr(sound, "samplerate"):
             self.samplerate = sound.samplerate
 
-        # Create default attributes
+        # Initialize annotations
         self.annotations = dict()
-        self.transformation = dict()
+        self.annotate(samplerate=float(self.samplerate), **kwargs)
 
-        self.annotate(samplerate=float(self.samplerate))
+        # Initialize transformation metadata
+        self.transformation = dict()
 
         if isinstance(sound, str):
             self.annotate(original_filename=sound)
             self.manager.store(self, dict(type=LoadTransform,
                                           filename=sound,
                                           samplerate=float(self.samplerate)), save=save)
+        # Do I really need this?
         if initialize:
             self.manager.store(self, dict(type=InitTransform), save=save)
 
@@ -151,21 +157,21 @@ class Sound(BHSound):
         self.annotations.update(annotations)
         self.manager.database.store_annotations(self.id, **annotations)
 
-    def __array_wrap__(self, obj, context=None):
-
-        tmp = super(Sound, self).__array_wrap__(obj, context)
-        if not hasattr(tmp, "manager") and hasattr(self, "manager"):
-            tmp.manager = self.manager
-        if not hasattr(tmp, "id") and hasattr(self, "id"):
-            tmp.id = self.id
-
-        return tmp
-
-    def __array_finalize__(self, obj):
-
-        super(Sound, self).__array_finalize__(obj)
-        self.manager = getattr(obj, "manager", SoundManager())
-        self.id = getattr(obj, "id", self.manager.get_id())
+    # def __array_wrap__(self, obj, context=None):
+    #
+    #     tmp = super(Sound, self).__array_wrap__(obj, context)
+    #     if not hasattr(tmp, "manager") and hasattr(self, "manager"):
+    #         tmp.manager = self.manager
+    #     if not hasattr(tmp, "id") and hasattr(self, "id"):
+    #         tmp.id = self.id
+    #
+    #     return tmp
+    #
+    # def __array_finalize__(self, obj):
+    #
+    #     super(Sound, self).__array_finalize__(obj)
+    #     self.manager = getattr(obj, "manager", SoundManager())
+    #     self.id = getattr(obj, "id", self.manager.get_id())
 
     def __add__(self, other):
 
@@ -454,9 +460,9 @@ class Sound(BHSound):
 
         return padded.combine(other)
 
-    def envelope(self, min_power=0*dB):
-
-        env = np.abs(np.asarray(self))
+    # def envelope(self, min_power=0*dB):
+    #
+    #     env = np.abs(np.asarray(self))
 
     def get_power_nonsilence(self, silence_threshold=.1):
 
@@ -524,8 +530,6 @@ class Sound(BHSound):
         stop = self._round_time(inds[1])
 
         return self.slice(start, stop)
-
-
 
     @staticmethod
     def query(sounds, query_function):

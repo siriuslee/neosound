@@ -41,6 +41,7 @@ class SoundTransformTest(TestCase):
             assert len(metadata) > 0
         except AssertionError:
             print("Failed")
+            raise
         else:
             print("Passed")
 
@@ -51,17 +52,20 @@ class SoundTransformTest(TestCase):
             assert np.all(np.asarray(sound) == np.asarray(new_sound))
         except AssertionError:
             print("Failed")
+            raise
         else:
             print("Passed")
 
     def test_create_transform(self):
 
+        # Should check that these types are what we say they are.
         print("Checking white noise stimulus creation...", end="")
         try:
             sound = Sound.whitenoise(duration=3*second)
             self.check_metadata(sound)
         except AssertionError:
             print("Failed")
+            raise
         else:
             print("Passed")
 
@@ -71,6 +75,7 @@ class SoundTransformTest(TestCase):
             self.check_metadata(sound)
         except AssertionError:
             print("Failed")
+            raise
         else:
             print("Passed")
 
@@ -80,6 +85,7 @@ class SoundTransformTest(TestCase):
             self.check_metadata(sound)
         except AssertionError:
             print("Failed")
+            raise
         else:
             print("Passed")
 
@@ -94,6 +100,7 @@ class SoundTransformTest(TestCase):
             assert "original_filename" in sound.annotations
         except AssertionError:
             print("Failed")
+            raise
         else:
             print("Passed")
 
@@ -106,7 +113,7 @@ class SoundTransformTest(TestCase):
             assert sound.to_mono().nchannels == 1
         except AssertionError:
             print("Failed")
-            return
+            raise
         else:
             print("Passed")
 
@@ -122,7 +129,7 @@ class SoundTransformTest(TestCase):
             assert sound.nsamples == int(5*second * sound.samplerate)
         except AssertionError:
             print("Failed")
-            return
+            raise
         else:
             print("Passed")
 
@@ -133,18 +140,18 @@ class SoundTransformTest(TestCase):
         print("Checking clip transform...", end="")
         sound = Sound.whitenoise(duration=3*second)
         try:
-            assert sound.max() > 0.25
-            assert sound.min() < -0.25
-            sound = sound.clip(-0.25, 0.25)
-            assert sound.max() == 0.25
-            assert sound.min() == -0.25
+            clip_to = float(np.abs(sound).max()) * 0.8
+            clipped = sound.clip(clip_to, -clip_to)
+            inds = np.abs(np.asarray(clipped)) < clip_to
+            assert np.all(np.asarray(clipped)[inds] == np.asarray(sound)[inds])
+            assert np.all(np.abs(np.asarray(clipped))[~inds] == clip_to)
         except AssertionError:
             print("Failed")
-            return
+            raise
         else:
             print("Passed")
 
-        self.check_transform("clip", sound)
+        self.check_transform("clip", clipped)
 
     def test_slice_transform(self):
 
@@ -157,7 +164,7 @@ class SoundTransformTest(TestCase):
             assert sliced[-1] == sound[-1]
         except AssertionError:
             print("Failed")
-            return
+            raise
         else:
             print("Passed")
 
@@ -172,7 +179,7 @@ class SoundTransformTest(TestCase):
             assert np.all(np.isclose(new_sound.level, 70))
         except AssertionError:
             print("Failed")
-            return
+            raise
         else:
             print("Passed")
 
@@ -189,7 +196,7 @@ class SoundTransformTest(TestCase):
             assert np.all(np.asarray(sound) == 2 * np.asarray(copy_sound))
         except AssertionError:
             print("Failed")
-            return
+            raise
         else:
             print("Passed")
 
@@ -206,7 +213,7 @@ class SoundTransformTest(TestCase):
             assert np.all(np.asarray(combined_sound) == (np.asarray(sound1) + np.asarray(sound2)))
         except AssertionError:
             print("Failed")
-            return
+            raise
         else:
             print("Passed")
 
@@ -224,7 +231,7 @@ class SoundTransformTest(TestCase):
             assert np.all(np.asarray(new_sound[1*second:]) == np.asarray(sound1[1*second:]))
         except AssertionError:
             print("Failed")
-            return
+            raise
         else:
             print("Passed")
 
