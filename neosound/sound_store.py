@@ -18,7 +18,7 @@ class SoundStore(object):
 
     def get_annotations(self, id_):
 
-        annotations = dict((key, value) for key, value in self.data[id_].iteritems() if not value.startswith("transform_"))
+        annotations = dict((key, value) for key, value in self.data[id_].iteritems() if not key.startswith("transform_"))
         return annotations
 
     def get_metadata(self, id_, *args):

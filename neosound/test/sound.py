@@ -1,7 +1,7 @@
 from __future__ import print_function
 import os
 import copy
-from unittest import TestCase
+from unittest import TestCase, main
 
 import numpy as np
 
@@ -39,3 +39,8 @@ class SoundTest(TestCase):
             return
         else:
             print("Passed")
+
+
+if __name__ == "__main__":
+
+    main()
