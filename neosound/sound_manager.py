@@ -44,6 +44,7 @@ class SoundManager(object):
     def store(self, derived, metadata, original=None, save=False):
 
         # Might need to fix this by instantiating a new sound object. Otherwise derived might be different depending on the value of read_only
+        # I think I want to avoid re-instantiating the object here. It should be done using the ensure_type decorator
         if self.read_only:
             if original is not None:
                 derived = original.__class__(derived, manager=self)

@@ -69,7 +69,7 @@ def create_sound(func):
         created.manager.store(created, metadata, save=True)
         return created
 
-    create.__doc__ = getattr(BHSound, func.__name__).__doc__
+    create.__doc__ = getattr(BHSound, func.__name__, func).__doc__
 
     return create
 
@@ -84,11 +84,11 @@ def ensure_type(func):
         if isinstance(result, tuple):
             result = list(result) # tuples are immutable. Convert to list first.
             for ii, rr in enumerate(result):
-                if isinstance(rr, BHSound):
+                if isinstance(rr, (BHSound, np.ndarray)):
                     result[ii] = Sound(rr, manager=obj.manager)
             result = tuple(result)
         else:
-            if isinstance(result, BHSound):
+            if isinstance(result, (BHSound, np.ndarray)):
                 result = Sound(result, manager=obj.manager)
 
         return result
@@ -351,7 +351,8 @@ class Sound(BHSound):
         if samplerate == self.samplerate:
             return self
 
-        resampled = super(Sound, self).resample(samplerate, resample_type=resample_type)
+        resampled = resample(self, int(samplerate * self.duration))
+        resampled = Sound(resampled, samplerate=samplerate, manager=self.manager)
 
         metadata = dict(type=ResampleTransform,
                         new_samplerate=float(samplerate),
@@ -450,13 +451,13 @@ class Sound(BHSound):
                 max_start = max(other.duration - self.duration, 0 * second)
             start = random.uniform(min_start, max_start)
 
-        if ratio is not None:
-            other = other.set_level(self.level - ratio)
-
         stop = start + self.duration
         duration = max(stop, other.duration)
         padded = self.pad(duration, start=start)
         other = other.pad(duration, start=0*second)
+
+        if ratio is not None:
+            other = other.set_level(self.level - ratio)
 
         return padded.combine(other)
 
@@ -547,6 +548,7 @@ class Sound(BHSound):
 
     # Wrappers for particular sound types
     @staticmethod
+    @create_sound
     def spectrum_matched_noise(spectrum, samplerate=44100*hertz, manager=SoundManager(), save=True):
 
         if len(spectrum.shape) == 1:
@@ -564,7 +566,7 @@ class Sound(BHSound):
             phase[n2 + 1:, :] = np.flipud(np.conj(phase[1: n2, :]))
 
         z = mag * phase
-        noise = Sound(np.fft.ifft(z, axis=0).real, samplerate=samplerate, manager=manager, initialize=True, save=save)
+        noise = Sound(np.fft.ifft(z, axis=0).real, samplerate=samplerate, manager=manager)
 
         return noise
 
@@ -577,7 +579,8 @@ class Sound(BHSound):
         pad_duration = next2(int(duration * self.samplerate)) * self.sampleperiod
         spectrum = np.fft.fft(self.pad(pad_duration, start=0*second), axis=0)
 
-        return Sound.spectrum_matched_noise(spectrum, samplerate=self.samplerate, manager=self.manager)[:duration].set_level(self.level)
+        return Sound.spectrum_matched_noise(spectrum, samplerate=self.samplerate, manager=self.manager).slice(
+            0*second, duration).set_level(self.level)
 
     @classmethod
     @create_sound
