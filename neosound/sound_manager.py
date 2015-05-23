@@ -1,5 +1,6 @@
 import logging
 import os
+import copy
 
 import numpy as np
 
@@ -9,76 +10,135 @@ from neosound.sound_transforms import *
 this_dir, this_filename = os.path.split(__file__)
 data_dir = os.path.join(this_dir, "..", "data")
 
+# TODO: need to fix the circular import problem...
 
 class SoundManager(object):
-    _default_database = SoundStore()
-    logger = logging.Logger(os.path.join(data_dir, "sound_log"), level=30)
+    _default_database = DictStore()
+    logging.basicConfig()
+    logger = logging.getLogger()
+    logger.setLevel(logging.WARN)
 
-    def __init__(self, database=None, filename=None, db_args=None, read_only=False):
+    def __init__(self, database=None, filename=None, read_only=False, **db_args):
         """
         Initialize a SoundManager object. If no database is provided, the default one will be chosen. If one has
-        been recently used (i.e. since the class was defined), then that one will be chosen. Otherwise, no data will
-        be stored.
+        been recently used (i.e. since the class was defined), then that one will be chosen. Otherwise,
+        a non-persistent dictionary-based storage will be used.
 
         :param database: A subclass of SoundStore responsible for persisting sounds to a file.
-        :param filename: The name of the sound file.
-        :param db_args: A dictionary of arguments that will be passed to the constructor of database.
+        :param filename: The name of the persistent sound store file.
         :param read_only: prevents writing to the database if True
+        :param db_args: A dictionary of arguments that will be passed to the constructor of database.
         """
-
-        if db_args is None:
-            db_args = dict()
 
         if database is None:
             self.database = self._default_database
         else:
-            self.database = database(filename, **db_args)
+            self.database = database(filename, read_only=read_only, **db_args)
             self._default_database = self.database
 
-        self.read_only = read_only
-
     def get_id(self):
+        """
+        Get a unique id from the database.
+        """
 
         return self.database.get_id()
 
-    def store(self, derived, metadata, original=None, save=False):
+    def import_ids(self, manager, ids, recursive=False, reconstruct_necessary=True, **kwargs):
+        """
+        Imports ids from manager and adds them to the current database.
+        :param manager: Another sound manager that stored ids
+        :param ids: list of ids to import from the manager
+        :param recursive: if True, import the parents of the ids too. (False)
+        :param reconstruct_necessary: if True, reconstruct all sounds whose parents aren't imported. (True)
+        :param kwargs: all other kwargs are added as annotations to each imported id
+        :returns a list of ids in the new manager corresponding to the input ids
+        """
 
-        # Might need to fix this by instantiating a new sound object. Otherwise derived might be different depending on the value of read_only
-        # I think I want to avoid re-instantiating the object here. It should be done using the ensure_type decorator
-        if self.read_only:
-            if original is not None:
-                derived = original.__class__(derived, manager=self)
-            return derived
+        processed_ids = dict()
+        for id_ in ids:
+            if id_ not in processed_ids: # Don't import the same ID twice
+                new_id = self.get_id()
+                self.logger.debug("Importing id %s with new id %s" % (id_, new_id))
 
-        try:
-            transform = metadata["type"](self, derived, metadata, original, save)
-        except KeyError as e:
-            raise KeyError("Error trying to store sound transformation metadata: %s" % e)
+                # import annotations
+                annotations = manager.database.get_annotations(id_)
+                self.database.store_annotations(new_id, **annotations)
+                self.database.store_annotations(new_id, **kwargs)
 
-        derived = transform.store()
-        return derived
+                # import transformation metadata
+                metadata = manager.database.get_metadata(id_)
+                self.database.store_metadata(new_id, **metadata)
 
-    def annotate(self, id_, **annotations):
+                # import data
+                data = manager.database.get_data(id_)
+                if data is not None:
+                    self.database.store_data(new_id, data)
 
-        if self.read_only:
-            return False
+                processed_ids[id_] = new_id
 
-        self.database.store_annotations(id_, **annotations)
-        return True
+                if recursive:
+                    if "parents" in metadata:
+                        ids.extend(metadata["parents"])
+
+        # Fix parents and children
+        for id_, new_id in processed_ids.iteritems():
+            self.logger.debug("Converting parents and children attributes for id %s" % new_id)
+            metadata = self.database.get_metadata(new_id)
+            if "parents" in metadata:
+                parents = metadata.pop("parents")
+                try:
+                    metadata["parents"] = list()
+                    for pid in parents:
+                        metadata["parents"].append(processed_ids[pid])
+                except KeyError: #
+                    data = self.database.get_data(new_id)
+                    if (data is None) and reconstruct_necessary:
+                        self.logger.debug("Parents of %s not in database. Attempting to reconstruct and store data" % new_id)
+                        data = np.asarray(manager.reconstruct(id_))
+                        self.database.store_data(new_id, data)
+
+            if "children" in metadata:
+                children = metadata.pop("children")
+                metadata["children"] = list()
+                for cid in children:
+                    if cid in processed_ids:
+                        metadata["children"].append(processed_ids[cid])
+
+            self.database.store_metadata(new_id, **metadata)
+
+        return [processed_ids[id_] for id_ in ids]
+
+    def store(self, derived, metadata, original=None):
+        """
+        Attempt to store the new sound object in the database.
+        :param derived: The new sound object
+        :param metadata: a dictionary of transformation metadata
+        :param original: the parent sound object that was modified to produce derived
+        :return: True if sound was stored, else False
+        """
+
+        if "type" in metadata:
+            transform = metadata["type"](self, derived, metadata, original)
+        else:
+            raise KeyError("Error trying to store sound transformation metadata: metadata does not contain a key 'type'")
+
+        return transform.store()
+
+    def get_transformation_metadata(self, id_):
+
+        return self.database.get_metadata(id_)
 
     # I think these recursive methods can be done better, but that's low priority
     def get_roots(self, id_):
 
-        def get_parents(id_):
-            metadata = self.database.get_metadata(id_, "parents")
-            if (metadata is not None) and (len(metadata["parents"])):
-                for pid in metadata["parents"]:
-                    get_parents(pid)
-            else:
-                roots.append(id_)
-
         roots = list()
-        get_parents(id_)
+        metadata = self.database.get_metadata(id_)
+        if ("parents" in metadata) and len(metadata["parents"]):
+            for pid in metadata["parents"]:
+                roots.extend(self.get_roots(pid))
+        else:
+            roots.append(id_)
+
         return roots
 
     def reconstruct_individual(self, id_, root_id):
@@ -86,26 +146,24 @@ class SoundManager(object):
 
         def get_waveform_ind(id_):
             self.logger.debug("Attempting to get waveform for id %s" % id_)
-            metadata = self.database.get_metadata(id_)
-            if len(metadata) == 0:
-                raise KeyError("%s not in database!" % id_)
-            transform = metadata["type"].reconstruct
 
-            try:
-                self.logger.debug("Attempting to get waveform from parents instead")
+            metadata = self.database.get_metadata(id_)
+            transform = metadata["type"]
+            if ("parents" in metadata) and len(metadata["parents"]):
                 pids = metadata["parents"]
-                if len(pids):
-                    self.logger.debug("Attempting to reconstruct from %s parents" % len(pids))
-                    return transform([get_waveform_ind(pid) for pid in pids], metadata, manager=self)
-                else:
-                    raise KeyError
-            except KeyError:
-                # ipdb.set_trace()
+                self.logger.debug("Attempting to reconstruct from %s parents" % len(pids))
+                return transform.reconstruct([get_waveform_ind(pid) for pid in pids],
+                                             metadata,
+                                             manager=self)
+            else:
                 self.logger.debug("parents not found in database for id %s. Attempting to reconstruct!" % id_)
                 # If this root id is not in root_ids, we want to replace the waveform with silence
                 silence = id_ != root_id
                 waveform = self.database.get_data(id_)
-                return transform(waveform, metadata, silence, manager=self)
+                return transform.reconstruct(waveform,
+                                             metadata,
+                                             silence,
+                                             manager=self)
 
         roots = self.get_roots(id_)
         if root_id not in roots:
@@ -115,75 +173,68 @@ class SoundManager(object):
         component_id = self.database.filter_ids(transform_id=id_,
                                                 transform_root_id=root_id)
         if len(component_id):
-            store = False
+
             component_id = component_id[0]
             data = self.database.get_data(component_id)
             if data is not None:
-                # Should probably check if this is not there
                 samplerate = self.database.get_annotations(component_id)["samplerate"]
-                sound = Sound(data, samplerate=samplerate * hertz, manager=self)
+                sound = Sound(data, samplerate=samplerate*hertz, manager=self)
                 sound.id = component_id
                 sound.annotations.update(self.database.get_annotations(component_id))
-                sound.transformation.update(self.database.get_metadata(component_id))
 
                 return sound
+            else:
+                store = True
+                metadata = dict(type=ComponentTransform,
+                                id=id_,
+                                root_id=root_id,
+                                parents=[id_, root_id])
+
         else:
             store = True
             metadata = dict(type=ComponentTransform,
                             id=id_,
-                            root_id=root_id)
+                            root_id=root_id,
+                            parents=[id_, root_id])
 
-        # This can be done better. Probably shouldn't use a bare except
-        previous_read_only = self.read_only
-        try:
-            self.read_only = True
-            sound = get_waveform_ind(id_)
-        except:
-            raise
-        finally:
-            self.read_only = previous_read_only
-
-        if (not self.read_only) and store:
-            sound = self.store(sound, metadata)
+        sound = get_waveform_ind(id_)
+        if store:
+            self.store(sound, metadata)
 
         return sound
 
     def reconstruct(self, id_):
         from neosound.sound import Sound
 
-        self.reconstruct_flag = True
-
         def get_waveform(id_):
 
             self.logger.debug("Attempting to get waveform for id %s" % id_)
-            metadata = self.database.get_metadata(id_)
-            if len(metadata) == 0:
-                raise KeyError("%s not in database!" % id_)
-            transform = metadata["type"].reconstruct
             data = self.database.get_data(id_)
             if data is not None:
-                # Should probably do something if samplerate is not there
                 samplerate = self.database.get_annotations(id_)["samplerate"]
                 return Sound(data, samplerate=samplerate * hertz, manager=self)
             else:
-                try:
-                    self.logger.debug("Attempting to get waveform from parents instead")
+                self.logger.debug("Attempting to get waveform from parents instead")
+                metadata = self.database.get_metadata(id_)
+                transform = metadata["type"]
+
+                if ("parents" in metadata) and len(metadata["parents"]):
                     pids = metadata["parents"]
-                    if len(pids):
-                        self.logger.debug("Attempting to reconstruct from %s parents" % len(pids))
-                        return transform([get_waveform(pid) for pid in pids], metadata, manager=self)
-                    else:
-                        raise KeyError
-                except KeyError:
+                    self.logger.debug("Attempting to reconstruct from %s parents" % len(pids))
+                    return transform.reconstruct([get_waveform(pid) for pid in pids],
+                                                 metadata,
+                                                 manager=self)
+                else:
                     self.logger.debug("parents not found in database for id %s. Attempting to reconstruct!" % id_)
                     waveform = self.database.get_data(id_)
-                    return transform(waveform, metadata, manager=self)
+                    return transform.reconstruct(waveform,
+                                                 metadata,
+                                                 manager=self)
 
         sound = get_waveform(id_)
         sound.id = id_
         sound.annotations.update(self.database.get_annotations(id_))
-        sound.transformation.update(self.database.get_metadata(id_))
-        self.reconstruct_flag = False
+
         return sound
 
 

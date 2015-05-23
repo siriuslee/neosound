@@ -36,7 +36,7 @@ class SoundTest(TestCase):
             assert s.annotations["annoyinglevel"] == 10
         except AssertionError:
             print("Failed")
-            return
+            raise
         else:
             print("Passed")
 
