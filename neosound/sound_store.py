@@ -120,10 +120,13 @@ class DictStore(SoundStore):
 
         return True
 
-    def filter_ids(self, num_matches=None, **kwargs):
+    def filter_ids(self, ids=None, num_matches=None, **kwargs):
 
         result_ids = list()
-        for name, annotations in self.data.iteritems():
+        if ids is None:
+            ids = self.data.iterkeys()
+        for name in ids:
+            annotations = self.data[name]
             match = True
             for key, value in kwargs.iteritems():
                 if key in annotations:
@@ -141,10 +144,13 @@ class DictStore(SoundStore):
 
         return result_ids
 
-    def filter_by_func(self, num_matches=None, **kwarg_funcs):
+    def filter_by_func(self, ids=None, num_matches=None, **kwarg_funcs):
 
         result_ids = list()
-        for name, annotations in self.data.iteritems():
+        if ids is None:
+            ids = self.data.iterkeys()
+        for name in ids:
+            annotations = self.data[name]
             match = True
             for key, func in kwarg_funcs.iteritems():
                 if key in annotations:
@@ -291,11 +297,14 @@ class HDF5Store(SoundStore):
 
         return True
 
-    def filter_ids(self, num_matches=None, **kwargs):
+    def filter_ids(self, ids=None, num_matches=None, **kwargs):
 
         result_ids = list()
         with h5py.File(self.filename, "r") as f:
-            for name, group in f.iteritems():
+            if ids is None:
+                ids = f.iterkeys()
+            for name in ids:
+                group = f[name]
                 match = True
                 for key, value in kwargs.iteritems():
                     if key in group.attrs:
@@ -313,11 +322,14 @@ class HDF5Store(SoundStore):
 
         return result_ids
 
-    def filter_by_func(self, **kwarg_funcs):
+    def filter_by_func(self, ids=None, num_matches=None, **kwarg_funcs):
 
         result_ids = list()
         with h5py.File(self.filename, "r") as f:
-            for name, group in f.iteritems():
+            if ids is None:
+                ids = f.iterkeys()
+            for name in ids:
+                group = f[name]
                 match = True
                 for key, func in kwarg_funcs.iteritems():
                     try:
@@ -329,6 +341,9 @@ class HDF5Store(SoundStore):
                         break
                 if match:
                     result_ids.append(name)
+
+                if (num_matches is not None) and (len(result_ids) == num_matches):
+                    break
 
         return result_ids
 

@@ -1,5 +1,6 @@
 from __future__ import division, print_function
 import random
+from functools import wraps
 from matplotlib import pyplot as plt
 from scipy.signal import firwin, filtfilt, resample
 import numpy as np
@@ -12,7 +13,8 @@ try:
     from neo.core.baseneo import _check_annotations
 except ImportError:
     from neosound.annotations import _check_annotations
-from neosound.sound_manager import *
+from neosound.sound_manager import SoundManager
+from neosound.sound_transforms import *
 
 def store_transformation(func):
     '''
@@ -694,6 +696,15 @@ class Sound(BHSound):
             sounds = [s for s in sounds if query_function(s)]
 
         return sounds
+    #
+    # @staticmethod
+    # def sequence(sounds, duration=None, isis=None, min_isi=0*second, max_isi=1*second, overlapping=False):
+    #
+    #     if isis is not None:
+    #         if not (len(isis) == len(sounds) - 1):
+    #             raise ValueError("length of isis must be equal to len(sounds) - 1")
+    #     else:
+    #         isis = np.random.uniform()
 
     # Wrappers for particular sound types
     @staticmethod
