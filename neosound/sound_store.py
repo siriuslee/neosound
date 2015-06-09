@@ -41,7 +41,8 @@ class SoundStore(object):
         self.filename = filename
         self.read_only = read_only
 
-    def get_id(self):
+    @staticmethod
+    def get_id():
 
         return str(uuid.uuid4())
 

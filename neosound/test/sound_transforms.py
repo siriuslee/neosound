@@ -175,6 +175,18 @@ class SoundTransformTest(TestCase):
         return scaled, sound
 
     @check_transform_data
+    def test_ramp_transform(self):
+
+        sound = Sound.whitenoise(duration=1*second)
+        ramped = sound.ramp(duration=.02*second)
+        assert abs(ramped[.01*second]) < abs(sound[.01*second])
+        assert ramped[.02*second] == sound[.02*second]
+        assert abs(ramped[.99*second]) < abs(sound[.99*second])
+        assert ramped[.98*second] == sound[.98*second]
+
+        return ramped, sound
+
+    @check_transform_data
     def test_add_transform(self):
 
         sound1 = Sound.whitenoise(duration=3*second)

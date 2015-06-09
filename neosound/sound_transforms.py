@@ -324,9 +324,8 @@ class MultiplyTransform(SoundTransform):
             samplerate = metadata["samplerate"]*hertz
 
         sound = Sound(waveforms[0], samplerate=samplerate, manager=manager)
-        level = metadata["level"]*dB
 
-        return sound.set_level(level, read_only=True)
+        return sound.scale(metadata["coefficients"], read_only=True)
 
 class AddTransform(SoundTransform):
     """

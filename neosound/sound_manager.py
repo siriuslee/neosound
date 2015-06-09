@@ -5,7 +5,7 @@ import copy
 import numpy as np
 
 from neosound.sound_store import DictStore
-# from neosound.sound_transforms import *
+from neosound.sound_transforms import *
 
 this_dir, this_filename = os.path.split(__file__)
 data_dir = os.path.join(this_dir, "..", "data")

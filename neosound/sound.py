@@ -13,8 +13,9 @@ try:
     from neo.core.baseneo import _check_annotations
 except ImportError:
     from neosound.annotations import _check_annotations
-from neosound.sound_manager import SoundManager
+from neosound.sound_manager import *
 from neosound.sound_transforms import *
+from neosound.sound_store import *
 
 def store_transformation(func):
     '''
@@ -460,7 +461,7 @@ class Sound(BHSound):
 
     @store_transformation
     @ensure_type
-    def resample(self, samplerate, resample_type="sinc_best"):
+    def resample(self, samplerate=None, resample_type="sinc_best"):
         """
         Returns a resampled version of the sound using scipy.signal.resample.
         :param samplerate: desired output samplerate in hertz
@@ -468,7 +469,7 @@ class Sound(BHSound):
         :return: A resampled Sound object
         """
 
-        if samplerate == self.samplerate:
+        if (samplerate == self.samplerate) or (samplerate is None):
             raise UnprocessedError("Samplerate is already %.1f" % samplerate)
 
         resampled = resample(self, int(samplerate * self.duration))
@@ -481,36 +482,20 @@ class Sound(BHSound):
 
     @store_transformation
     @ensure_type
-    def set_level(self, level):
+    def scale(self, c):
         """
-        Sets level in dB SPL (RMS) assuming array is in Pascals.
-        :param level: a value in dB, or a tuple of levels, one for each channel.
-        :return: A new Sound object with the specified level
+        Scales the sound by a factor of c.
+        :param c: a coefficient.
+        :return: A scaled sound object
         """
 
-        # TODO: What is the reference intensity?
-
-        # Sound is silent. Scaling it would result in breakage.
-        if not np.any(self.asarray() != 0):
-            raise UnprocessedError("Sound is silent")
-
-        rms_dB = self.get_level()
-        if self.nchannels>1:
-            level = np.array(level)
-            if level.size==1:
-                level = level.repeat(self.nchannels)
-            level = np.reshape(level, (1, self.nchannels))
-            rms_dB = np.reshape(rms_dB, (1, self.nchannels))
-        else:
-            if not isinstance(level, dB_type):
-                raise dB_error('Must specify level in dB')
-            rms_dB = float(rms_dB)
-            level = float(level)
-        gain = 10**((level-rms_dB)/20.)
+        if isinstance(c, dB_type):
+            c = c.gain()
 
         metadata = dict(type=MultiplyTransform,
-                        level=level)
-        return self * gain, metadata
+                        coefficients=c)
+
+        return self * c, metadata
 
     @store_transformation
     @ensure_type
@@ -626,6 +611,36 @@ class Sound(BHSound):
         plt.xlim((0 * second, self.duration))
         plt.xlabel("Time (s)")
 
+    def set_level(self, level):
+        """
+        Sets level in dB SPL (RMS) assuming array is in Pascals.
+        :param level: a value in dB, or a tuple of levels, one for each channel.
+        :return: A new Sound object with the specified level
+        """
+
+        # TODO: What is the reference intensity?
+
+        # Sound is silent. Scaling it would result in breakage.
+        if not np.any(self.asarray() != 0):
+            raise UnprocessedError("Sound is silent")
+
+        rms_dB = self.get_level()
+        if self.nchannels>1:
+            level = np.array(level)
+            if level.size==1:
+                level = level.repeat(self.nchannels)
+            level = np.reshape(level, (1, self.nchannels))
+            rms_dB = np.reshape(rms_dB, (1, self.nchannels))
+        else:
+            if not isinstance(level, dB_type):
+                raise dB_error('Must specify level in dB')
+            rms_dB = float(rms_dB)
+            level = float(level)
+        gain = 10**((level-rms_dB)/20.)
+
+        return self.scale(gain)
+
+
     def store(self):
 
         self.manager.database.store_data(self.id, np.asarray(self))
@@ -696,15 +711,6 @@ class Sound(BHSound):
             sounds = [s for s in sounds if query_function(s)]
 
         return sounds
-    #
-    # @staticmethod
-    # def sequence(sounds, duration=None, isis=None, min_isi=0*second, max_isi=1*second, overlapping=False):
-    #
-    #     if isis is not None:
-    #         if not (len(isis) == len(sounds) - 1):
-    #             raise ValueError("length of isis must be equal to len(sounds) - 1")
-    #     else:
-    #         isis = np.random.uniform()
 
     # Wrappers for particular sound types
     @staticmethod
@@ -822,16 +828,3 @@ class Sound(BHSound):
 class UnprocessedError(Exception):
     pass
 
-
-if False:
-    sm = SoundManager()
-    shaping = "/auto/k8/tlee/songs/shaping_songs/Track1long.wav"
-    s = Sound(shaping, manager=sm)
-    w = Sound.whitenoise(duration=s.duration, nchannels=s.nchannels, samplerate=s.samplerate, manager=sm)
-    t = Sound.tone(frequency=1000*hertz, duration=s.duration, nchannels=s.nchannels, samplerate=s.samplerate,
-                   manager=sm)
-    x = w.slice(1*second, 3*second)
-    sx = s.replace(0*second, x.duration,  x)
-    y = sx.combine(t)
-    z = y.pad(10*second)
-    #c = z.component(0)
