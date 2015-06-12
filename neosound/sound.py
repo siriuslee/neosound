@@ -232,7 +232,7 @@ class Sound(BHSound):
         """
 
         if self.duration != other.duration:
-            raise ValueError("Duration of the summed sounds must be identical")
+            raise ValueError("Duration of the summed sounds must be identical: %3.2f != %3.2f" % (self.duration, other.duration))
 
         return super(Sound, self).__add__(other)
 
