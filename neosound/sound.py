@@ -152,7 +152,10 @@ class Sound(BHSound):
 
         # Initialize annotations
         self.annotations = dict()
-        self.annotate(samplerate=float(self.samplerate), **kwargs)
+        self.annotate(samplerate=float(self.samplerate),
+                      duration=float(self.duration),
+                      nchannels=float(self.nchannels),
+                      **kwargs)
 
         if isinstance(sound, str):
             self.annotate(original_filename=sound)
@@ -576,7 +579,7 @@ class Sound(BHSound):
         other = other.pad(duration, start=0*second)
 
         if ratio is not None:
-            other = other.set_level(self.level - ratio)
+            other = other.set_level(padded.level - ratio)
 
         return padded.combine(other)
 
