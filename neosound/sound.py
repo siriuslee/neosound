@@ -718,17 +718,18 @@ class Sound(BHSound):
     def spectrum_matched_noise(spectrum, samplerate=44100*hertz, manager=SoundManager(), save=True):
 
         if len(spectrum.shape) == 1:
-            spectrum = np.reshape(spectrum, -1, 1)
+            spectrum = np.reshape(spectrum, (-1, 1))
 
         mag = np.abs(spectrum)
+        mag[0] = 0  #Set the DC component to 0
         n = len(mag)
         n2 = int(n / 2)
-        phase = np.ones(mag.shape, dtype=complex)
+        phase = np.zeros(mag.shape, dtype=complex)
         if n % 2 == 1:
             phase[1: n2 + 1, :] = np.exp(1j * np.random.uniform(-np.pi, np.pi, (n2, phase.shape[1])))
             phase[n2 + 1:, :] = np.flipud(np.conj(phase[1: n2 + 1, :]))
         else:
-            phase[1: n2 + 1, :] = np.exp(1j * np.random.uniform(-np.pi, np.pi, (n2, phase.shape[1])))
+            phase[1: n2, :] = np.exp(1j * np.random.uniform(-np.pi, np.pi, (n2 - 1, phase.shape[1])))
             phase[n2 + 1:, :] = np.flipud(np.conj(phase[1: n2, :]))
 
         z = mag * phase
