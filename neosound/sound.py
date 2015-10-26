@@ -4,7 +4,6 @@ from functools import wraps
 from matplotlib import pyplot as plt
 from scipy.signal import firwin, filtfilt, resample
 import numpy as np
-
 from brian import Quantity, msecond
 from brian.hears import Sound as BHSound
 from brian.hears import dB_type, dB_error
@@ -607,6 +606,45 @@ class Sound(BHSound):
             power.append((arr[1:-1][inds] ** 2).mean())
 
         return power
+
+    def play(self):
+        """
+        Uses pyaudio to play the sound
+        """
+
+        try:
+            import pyaudio
+        except ImportError:
+            try:
+                super(Sound, self).play()
+                return
+            except:
+                print("Install pyaudio to play sounds")
+                raise
+
+        CHUNK = 1024
+
+        # create an audio object
+        p = pyaudio.PyAudio()
+
+        # open stream based on the wave object which has been input.
+        stream = p.open(format=pyaudio.paInt16,
+                        channels=self.nchannels,
+                        rate=int(self.samplerate),
+                        output=True)
+
+        wav = np.int16(2 ** 15 * np.asarray(self))
+        for ii in xrange(int(len(wav) / CHUNK)):
+            try:
+                stream.write(wav[ii * CHUNK: (ii + 1) * CHUNK].tostring())
+            except KeyboardInterrupt:
+                print("Stopping stream")
+                break
+
+        # cleanup stuff.
+        stream.close()
+        p.terminate()
+
 
     def plot(self):
 
