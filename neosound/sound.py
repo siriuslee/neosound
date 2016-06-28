@@ -1,12 +1,17 @@
 from __future__ import division, print_function
 import random
+import warnings
 from functools import wraps
 from matplotlib import pyplot as plt
 from scipy.signal import firwin, filtfilt, resample
 import numpy as np
-from brian import Quantity, msecond
-from brian.hears import Sound as BHSound
-from brian.hears import dB_type, dB_error
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    # Ignore irrelevant brian warnings.
+    from brian import Quantity, msecond
+    from brian.hears import Sound as BHSound
+    from brian.hears import dB_type, dB_error
 
 try:
     from neo.core.baseneo import _check_annotations
@@ -649,7 +654,7 @@ class Sound(BHSound):
     def plot(self):
 
         plt.plot(self.times, self)
-        plt.xlim((0 * second, self.duration))
+        plt.xlim((0, float(self.duration)))
         plt.xlabel("Time (s)")
 
     def set_level(self, level):
@@ -658,8 +663,6 @@ class Sound(BHSound):
         :param level: a value in dB, or a tuple of levels, one for each channel.
         :return: A new Sound object with the specified level
         """
-
-        # TODO: What is the reference intensity?
 
         # Sound is silent. Scaling it would result in breakage.
         if not np.any(self.asarray() != 0):
