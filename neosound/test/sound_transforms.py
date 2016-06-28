@@ -1,7 +1,7 @@
 from __future__ import print_function
 import os
 import copy
-from unittest import TestCase
+from unittest import TestCase, main
 
 import numpy as np
 
@@ -11,6 +11,54 @@ this_dir, this_filename = os.path.split(__file__)
 wavfile = os.path.join(this_dir, "..", "..", "data", "zbsong.wav")
 h5out = "/tmp/test.h5"
 
+# TODO: Check that attributes are preserved in new objects (e.g. samplerate)
+# TODO: Resample test
+# TODO: Ramp test
+# TODO: Filter test
+
+def check_transform_data(func):
+    
+    transform_name = func.__name__.split("_")[1]
+
+    def check_transform_storage(sound, original):
+
+        try:
+            metadata = sound.manager.database.get_metadata(sound.id)
+            assert len(metadata) > 0
+        except AssertionError:
+            print("Failed")
+            raise
+        else:
+            print("Passed")
+
+    def check_transform_reconstruct(sound, original):
+
+        try:
+            new_sound = sound.manager.reconstruct(sound.id)
+            assert np.all(np.asarray(sound) == np.asarray(new_sound))
+        except AssertionError:
+            print("Failed")
+            raise
+        else:
+            print("Passed")
+
+    def wrapfunc(obj):
+        print("Checking %s transform..." % transform_name, end="")
+        try:
+            result, original = func(obj)
+        except AssertionError:
+            print("Failed")
+            raise
+        else:
+            print("Passed")
+
+        print("Checking %s transform storage..." % transform_name, end="")
+        check_transform_storage(result, original)
+
+        print("Checking %s transform reconstruction..." % transform_name, end="")
+        check_transform_reconstruct(result, original)
+
+    return wrapfunc
 
 class SoundTransformTest(TestCase):
 
@@ -20,48 +68,22 @@ class SoundTransformTest(TestCase):
     def tearDown(self):
         pass
 
-    def check_transform(self, transform_name, sound):
-
-        print("Checking %s transform storage..." % transform_name, end="")
-        self.check_transform_storage(sound)
-
-        print("Checking %s transform reconstruction..." % transform_name, end="")
-        self.check_transform_reconstruct(sound)
-
     def check_metadata(self, sound):
-        attributes = ["id", "annotations", "transformation"]
+        attributes = ["id", "annotations"]
 
         for attribute in attributes:
             assert hasattr(sound, attribute)
 
-    def check_transform_storage(self, sound):
-
-        try:
-            metadata = sound.manager.database.get_metadata(sound.id)
-            assert len(metadata) > 0
-        except AssertionError:
-            print("Failed")
-        else:
-            print("Passed")
-
-    def check_transform_reconstruct(self, sound):
-
-        try:
-            new_sound = sound.manager.reconstruct(sound.id)
-            assert np.all(np.asarray(sound) == np.asarray(new_sound))
-        except AssertionError:
-            print("Failed")
-        else:
-            print("Passed")
-
     def test_create_transform(self):
 
+        # Should check that these types are what we say they are.
         print("Checking white noise stimulus creation...", end="")
         try:
             sound = Sound.whitenoise(duration=3*second)
             self.check_metadata(sound)
         except AssertionError:
             print("Failed")
+            raise
         else:
             print("Passed")
 
@@ -71,6 +93,7 @@ class SoundTransformTest(TestCase):
             self.check_metadata(sound)
         except AssertionError:
             print("Failed")
+            raise
         else:
             print("Passed")
 
@@ -80,6 +103,7 @@ class SoundTransformTest(TestCase):
             self.check_metadata(sound)
         except AssertionError:
             print("Failed")
+            raise
         else:
             print("Passed")
 
@@ -94,139 +118,112 @@ class SoundTransformTest(TestCase):
             assert "original_filename" in sound.annotations
         except AssertionError:
             print("Failed")
+            raise
         else:
             print("Passed")
 
+    @check_transform_data
     def test_mono_transform(self):
 
-        print("Checking mono transform...", end="")
         sound = Sound.whitenoise(duration=3*second, nchannels=2)
-        try:
-            assert sound.nchannels == 2
-            assert sound.to_mono().nchannels == 1
-        except AssertionError:
-            print("Failed")
-            return
-        else:
-            print("Passed")
+        assert sound.nchannels == 2
+        mono = sound.to_mono()
+        assert mono.nchannels == 1
 
-        self.check_transform("mono", sound)
+        return mono, sound
 
+    @check_transform_data
     def test_pad_transform(self):
 
-        print("Checking pad transform...", end="")
         sound = Sound.whitenoise(duration=3*second)
-        try:
-            assert sound.nsamples == int(3*second * sound.samplerate)
-            sound = sound.pad(duration=5*second)
-            assert sound.nsamples == int(5*second * sound.samplerate)
-        except AssertionError:
-            print("Failed")
-            return
-        else:
-            print("Passed")
+        assert sound.nsamples == int(3*second * sound.samplerate)
+        padded = sound.pad(duration=5*second)
+        assert padded.nsamples == int(5*second * sound.samplerate)
 
-        self.check_transform("pad", sound)
+        return padded, sound
 
+    @check_transform_data
     def test_clip_transform(self):
 
-        print("Checking clip transform...", end="")
         sound = Sound.whitenoise(duration=3*second)
-        try:
-            assert sound.max() > 0.25
-            assert sound.min() < -0.25
-            sound = sound.clip(-0.25, 0.25)
-            assert sound.max() == 0.25
-            assert sound.min() == -0.25
-        except AssertionError:
-            print("Failed")
-            return
-        else:
-            print("Passed")
+        clip_to = float(np.abs(sound).max()) * 0.8
+        clipped = sound.clip(clip_to, -clip_to)
+        inds = np.abs(np.asarray(clipped)) < clip_to
+        assert np.all(np.asarray(clipped)[inds] == np.asarray(sound)[inds])
+        assert np.all(np.abs(np.asarray(clipped))[~inds] == clip_to)
 
-        self.check_transform("clip", sound)
+        return clipped, sound
 
+    @check_transform_data
     def test_slice_transform(self):
 
-        print("Checking slice transform...", end="")
         sound = Sound.whitenoise(duration=3*second)
-        try:
-            sliced = sound[1*second: 3*second]
-            assert sliced.nsamples == int(2*second * sound.samplerate)
-            assert sliced[0] == sound[1*second]
-            assert sliced[-1] == sound[-1]
-        except AssertionError:
-            print("Failed")
-            return
-        else:
-            print("Passed")
+        sliced = sound.slice(1*second, 3*second)
+        assert sliced.nsamples == int(2*second * sound.samplerate)
+        assert sliced[0] == sound[int(1*second * sound.samplerate)]
+        assert sliced[-1] == sound[-1]
 
-        self.check_transform("slice", sliced)
+        return sliced, sound
 
+    @check_transform_data
     def test_multiply_transform(self):
 
-        print("Checking multiply transform...", end="")
         sound = Sound.whitenoise(duration=3*second)
-        try:
-            new_sound = 2 * sound
-            assert np.all(np.asarray(sound) * 2 == np.asarray(new_sound))
-        except AssertionError:
-            print("Failed")
-            return
-        else:
-            print("Passed")
+        scaled = sound.set_level(70 * dB)
+        assert np.all(np.isclose(scaled.level, 70))
 
-        self.check_transform("multiply", new_sound)
+        return scaled, sound
 
-    def segfaulting_inplace_multiply_transform(self):
+    @check_transform_data
+    def test_ramp_transform(self):
 
-        print("Checking in-place multiply transform...", end="")
-        sound = Sound.whitenoise(duration=3*second)
-        copy_sound = copy.deepcopy(sound)
-        try:
-            sound *= 2
-            assert sound.id != copy_sound.id
-            assert np.all(np.asarray(sound) == 2 * np.asarray(copy_sound))
-        except AssertionError:
-            print("Failed")
-            return
-        else:
-            print("Passed")
+        sound = Sound.whitenoise(duration=1*second)
+        ramped = sound.ramp(duration=.02*second)
+        assert abs(ramped[.01*second]) < abs(sound[.01*second])
+        assert ramped[.02*second] == sound[.02*second]
+        assert abs(ramped[.99*second]) < abs(sound[.99*second])
+        assert ramped[.98*second] == sound[.98*second]
 
-        self.check_transform("in-place multiply", sound)
+        return ramped, sound
 
+    @check_transform_data
     def test_add_transform(self):
 
-        print("Checking add transform...", end="")
         sound1 = Sound.whitenoise(duration=3*second)
         sm = sound1.manager
         sound2 = Sound.whitenoise(duration=3*second, manager=sm)
-        try:
-            combined_sound = sound1 + sound2
-            assert np.all(np.asarray(combined_sound) == (np.asarray(sound1) + np.asarray(sound2)))
-        except AssertionError:
-            print("Failed")
-            return
-        else:
-            print("Passed")
+        combined = sound1.combine(sound2)
+        assert np.all(np.asarray(combined) == (np.asarray(sound1) + np.asarray(sound2)))
 
-        self.check_transform("add", combined_sound)
+        return combined, (sound1, sound2)
 
+    @check_transform_data
     def test_set_transform(self):
 
-        print("Checking set transform...", end="")
         sound1 = Sound.whitenoise(duration=3*second)
         sm = sound1.manager
         sound2 = Sound.whitenoise(duration=1*second)
-        try:
-            new_sound = sound1
-            new_sound[:1*second] = sound2
-            assert np.all(np.asarray(new_sound[:1*second]) == np.asarray(sound2))
-            assert np.all(np.asarray(new_sound[1*second:]) == np.asarray(sound1[1*second:]))
-        except AssertionError:
-            print("Failed")
-            return
-        else:
-            print("Passed")
+        replaced = sound1.replace(0*second, 1*second, sound2)
+        assert np.all(np.asarray(replaced[:1*second]) == np.asarray(sound2))
+        assert np.all(np.asarray(replaced[1*second:]) == np.asarray(sound1[1*second:]))
 
-        self.check_transform("set", new_sound)
+        return replaced, (sound1, sound2)
+
+    @check_transform_data
+    def test_component_transform(self):
+
+        s = Sound(wavfile).to_mono()
+        w = Sound.whitenoise(duration=s.duration + 1*second,
+                             samplerate=s.samplerate,
+                             nchannels=1)
+        c = s.embed(w, start=0.5*second, ratio=0*dB)
+        c1 = c.component(0)
+        assert np.all(c1.slice(0.5*second, 0.5*second+s.duration).asarray() == s.asarray())
+        # c1.store()
+
+        return c1, s
+
+
+if __name__ == "__main__":
+
+    main()
